@@ -57,6 +57,8 @@ For complex or critical tasks, press **Tab** to switch to Prometheus (Planner) m
 3. **Run `/start-work`** - The Atlas takes over:
    - Distributes tasks to specialized sub-agents
    - Verifies each task completion independently
+   - Auto-launches **Argus** to review task-scoped diffs
+   - Requires **[APPROVE]** before a task is considered done
    - Accumulates learnings across tasks
    - Tracks progress across sessions (resume anytime)
 
@@ -80,8 +82,8 @@ The orchestrator is designed to execute work plans created by Prometheus. Using 
 ```
 1. Press Tab → Enter Prometheus mode
 2. Describe work → Prometheus interviews you
-3. Confirm plan → Review .sisyphus/plans/*.md
-4. Run /start-work → Orchestrator executes
+3. Confirm plan → Review `.sisyphus/plans/*.md`
+4. Run `/start-work` → Orchestrator executes + Argus review gate
 ```
 
 **Prometheus and Atlas are a pair. Always use them together.**

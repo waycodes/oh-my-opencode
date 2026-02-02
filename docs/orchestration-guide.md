@@ -57,6 +57,7 @@ flowchart TD
         Atlas --> Oracle[Oracle]
         Atlas --> Frontend[Frontend<br>Engineer]
         Atlas --> Explore[Explore]
+        Atlas --> Argus[Argus<br>Reviewer]
     end
 ```
 
@@ -116,7 +117,8 @@ When the user enters `/start-work`, the execution phase begins.
 1. **State Management**: Creates `boulder.json` file to track current plan and session ID.
 2. **Task Execution**: Atlas reads the plan and processes TODOs one by one.
 3. **Delegation**: UI work is delegated to Frontend agent, complex logic to Oracle.
-4. **Continuity**: Even if the session is interrupted, work continues in the next session through `boulder.json`.
+4. **Review Gate (Argus)**: After each task, Argus reviews the **task-scoped diff** and must return **[APPROVE]** before completion.
+5. **Continuity**: Even if the session is interrupted, work continues in the next session through `boulder.json`.
 
 ---
 
@@ -162,3 +164,4 @@ You can control related features in `oh-my-opencode.json`.
 1. **Don't Rush**: Invest sufficient time in the interview with Prometheus. The more perfect the plan, the faster the execution.
 2. **Single Plan Principle**: No matter how large the task, contain all TODOs in one plan file (`.md`). This prevents context fragmentation.
 3. **Active Delegation**: During execution, delegate to specialized agents via `delegate_task` rather than modifying code directly.
+4. **Respect the Review Gate**: Fix Argus feedback and re-run review until **[APPROVE]** is recorded.

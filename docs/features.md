@@ -13,6 +13,7 @@ Oh-My-OpenCode provides 11 specialized AI agents. Each has distinct expertise, o
 | **Sisyphus** | `anthropic/claude-opus-4-5` | **The default orchestrator.** Plans, delegates, and executes complex tasks using specialized subagents with aggressive parallel execution. Todo-driven workflow with extended thinking (32k budget). Fallback: kimi-k2.5 → glm-4.7 → gpt-5.2-codex → gemini-3-pro. |
 | **Hephaestus** | `openai/gpt-5.2-codex` | **The Legitimate Craftsman.** Autonomous deep worker inspired by AmpCode's deep mode. Goal-oriented execution with thorough research before action. Explores codebase patterns, completes tasks end-to-end without premature stopping. Named after the Greek god of forge and craftsmanship. Requires gpt-5.2-codex (no fallback - only activates when this model is available). |
 | **oracle** | `openai/gpt-5.2` | Architecture decisions, code review, debugging. Read-only consultation - stellar logical reasoning and deep analysis. Inspired by AmpCode. |
+| **Argus** | `openai/gpt-5.2` | **Strict code reviewer.** Reviews task-scoped diffs, enforces patterns, flags bugs/security/perf issues. Must return `[APPROVE]` before work is considered complete. Read-only. |
 | **librarian** | `zai-coding-plan/glm-4.7` | Multi-repo analysis, documentation lookup, OSS implementation examples. Deep codebase understanding with evidence-based answers. Fallback: glm-4.7-free → claude-sonnet-4-5. |
 | **explore** | `anthropic/claude-haiku-4-5` | Fast codebase exploration and contextual grep. Fallback: gpt-5-mini → gpt-5-nano. |
 | **multimodal-looker** | `google/gemini-3-flash` | Visual content specialist. Analyzes PDFs, images, diagrams to extract information. Fallback: gpt-5.2 → glm-4.6v → kimi-k2.5 → claude-haiku-4-5 → gpt-5-nano. |
@@ -40,6 +41,7 @@ Ask @explore for the policy on this feature
 | Agent | Restrictions |
 |-------|-------------|
 | oracle | Read-only: cannot write, edit, or delegate |
+| Argus | Read-only: cannot write, edit, or delegate (requires read + lsp_diagnostics) |
 | librarian | Cannot write, edit, or delegate |
 | explore | Cannot write, edit, or delegate |
 | multimodal-looker | Allowlist only: read, glob, grep |
@@ -87,6 +89,17 @@ See [Tmux Integration](configurations.md#tmux-integration) for full configuratio
 Customize agent models, prompts, and permissions in `oh-my-opencode.json`. See [Configuration](configurations.md#agents).
 
 ---
+
+## Argus Review Gate (Code Review Workflow)
+
+When Sisyphus-Junior completes a task, Argus is auto-launched to review the **task-scoped diff**:
+
+- **Task-scoped change set**: A baseline is captured before the task starts; only files changed by that task are reviewed.
+- **Diff-driven review**: Argus receives `git diff --unified=3 -- <files>` for higher precision on large files.
+- **Trivial-change skipping**: Documentation-only or tiny changes can skip or downgrade review.
+- **Hard gate**: Work is not considered complete until Argus returns **[APPROVE]**.
+
+This eliminates "global repo noise" and ensures review focuses on what the task actually changed.
 
 ## Skills: Specialized Knowledge
 

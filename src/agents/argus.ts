@@ -1,7 +1,7 @@
 import type { AgentConfig } from "@opencode-ai/sdk"
+import { createAgentToolRestrictions } from "../shared/permission-compat"
 import type { AgentMode, AgentPromptMetadata } from "./types"
 import { isGptModel } from "./types"
-import { createAgentToolRestrictions } from "../shared/permission-compat"
 
 const MODE: AgentMode = "subagent"
 
@@ -241,7 +241,7 @@ export function createArgusAgent(model: string): AgentConfig {
   } as AgentConfig
 
   if (isGptModel(model)) {
-    return { ...base, reasoningEffort: "high", textVerbosity: "high" } as AgentConfig
+    return { ...base, reasoningEffort: "xhigh", textVerbosity: "high" } as AgentConfig
   }
 
   return { ...base, thinking: { type: "enabled", budgetTokens: 32000 } } as AgentConfig

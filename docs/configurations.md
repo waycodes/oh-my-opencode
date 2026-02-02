@@ -245,7 +245,7 @@ Or disable via `disabled_agents` in `~/.config/opencode/oh-my-opencode.json` or 
 }
 ```
 
-Available agents: `sisyphus`, `prometheus`, `oracle`, `librarian`, `explore`, `multimodal-looker`, `metis`, `momus`, `atlas`
+Available agents: `sisyphus`, `prometheus`, `oracle`, `argus`, `librarian`, `explore`, `multimodal-looker`, `metis`, `momus`, `atlas`
 
 ## Built-in Skills
 

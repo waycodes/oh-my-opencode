@@ -413,6 +413,7 @@ The Orchestrator **never trusts subagent claims**:
 - Executes full test suite
 - Reads actual file changes
 - Cross-references requirements
+- **Argus review gate**: task-scoped diffs are reviewed and must return **[APPROVE]** before completion
 
 ### 4. Model Optimization
 
@@ -432,8 +433,8 @@ Bulk work goes to cost-effective models (Sonnet, Haiku, Flash).
 3. **Answer Interview Questions**: Prometheus will ask about patterns, preferences, constraints
 4. **Review the Plan**: Check `.sisyphus/plans/` for generated work plan
 5. **Run `/start-work`**: Orchestrator takes over
-6. **Observe**: Watch tasks complete with verification
-7. **Done**: All todos complete, code verified, ready to ship
+6. **Observe**: Watch tasks complete with verification + Argus reviews
+7. **Done**: All todos complete, Argus approved, code verified, ready to ship
 
 ---
 

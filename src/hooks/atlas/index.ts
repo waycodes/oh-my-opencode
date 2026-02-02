@@ -94,7 +94,7 @@ delegate_task(
 \`\`\`
 
 **Argus will return [APPROVE] or [REJECT]:**
-- **[APPROVE]** → Proceed to Step 1 (manual verification)
+- **[APPROVE]** → Proceed to Step 1 (automated verification)
 - **[REJECT]** → Fix the issues first using \`delegate_task(session_id="...", prompt="fix: [specific issues]")\`
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -112,13 +112,13 @@ Run these commands YOURSELF - do NOT trust agent's claims:
 3. \`bash\` to run build/typecheck → Must succeed
 4. \`Read\` the actual code → Must match requirements
 
-**STEP 2: DETERMINE IF HANDS-ON QA IS NEEDED**
+**STEP 2: DETERMINE IF INTERACTIVE QA IS NEEDED**
 
 | Deliverable Type | QA Method | Tool |
 |------------------|-----------|------|
-| **Frontend/UI** | Browser interaction | \`/playwright\` skill |
-| **TUI/CLI** | Run interactively | \`interactive_bash\` (tmux) |
-| **API/Backend** | Send real requests | \`bash\` with curl |
+| **Frontend/UI** | Automated browser interaction | \`/playwright\` skill |
+| **TUI/CLI** | Automated interactive run | \`interactive_bash\` (tmux) |
+| **API/Backend** | Automated requests | \`bash\` with curl |
 
 Static analysis CANNOT catch: visual bugs, animation issues, user flow breakages.
 
@@ -126,7 +126,7 @@ Static analysis CANNOT catch: visual bugs, animation issues, user flow breakages
 
 \`\`\`
 todowrite([
-  { id: "qa-X", content: "HANDS-ON QA: [specific verification action]", status: "pending", priority: "high" }
+  { id: "qa-X", content: "INTERACTIVE QA (automated): [specific verification action]", status: "pending", priority: "high" }
 ])
 \`\`\`
 
