@@ -28,6 +28,16 @@ const TOKEN_LIMIT_KEYWORDS = [
   "non-empty content",
 ]
 
+const EMPTY_CONTENT_PATTERNS = [
+  /content field.*empty/i,
+  /content.*is empty/i,
+  /message object.*content.*empty/i,
+  /add a content\s*block/i,
+  /content\s*block.*required/i,
+  /content.*must.*non-empty/i,
+  /content.*array.*empty/i,
+]
+
 // Patterns that indicate thinking block structure errors (NOT token limit errors)
 // These should be handled by session-recovery hook, not compaction
 const THINKING_BLOCK_ERROR_PATTERNS = [
@@ -65,6 +75,10 @@ function extractMessageIndex(text: string): number | undefined {
   return undefined
 }
 
+function isEmptyContentError(text: string): boolean {
+  return EMPTY_CONTENT_PATTERNS.some((pattern) => pattern.test(text))
+}
+
 function isTokenLimitError(text: string): boolean {
   if (isThinkingBlockError(text)) {
     return false
@@ -75,7 +89,7 @@ function isTokenLimitError(text: string): boolean {
 
 export function parseAnthropicTokenLimitError(err: unknown): ParsedTokenLimitError | null {
   if (typeof err === "string") {
-    if (err.toLowerCase().includes("non-empty content")) {
+    if (err.toLowerCase().includes("non-empty content") || isEmptyContentError(err)) {
       return {
         currentTokens: 0,
         maxTokens: 0,
@@ -127,7 +141,7 @@ export function parseAnthropicTokenLimitError(err: unknown): ParsedTokenLimitErr
   }
 
   const combinedText = textSources.join(" ")
-  if (!isTokenLimitError(combinedText)) return null
+  if (!isTokenLimitError(combinedText) && !isEmptyContentError(combinedText)) return null
 
   if (typeof responseBody === "string") {
     try {
@@ -180,7 +194,7 @@ export function parseAnthropicTokenLimitError(err: unknown): ParsedTokenLimitErr
     }
   }
 
-  if (combinedText.toLowerCase().includes("non-empty content")) {
+  if (combinedText.toLowerCase().includes("non-empty content") || isEmptyContentError(combinedText)) {
     return {
       currentTokens: 0,
       maxTokens: 0,
