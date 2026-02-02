@@ -226,10 +226,6 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
     ? createDelegateTaskRetryHook(ctx)
     : null;
 
-  const startWork = isHookEnabled("start-work")
-    ? createStartWorkHook(ctx)
-    : null;
-
   const prometheusMdOnly = isHookEnabled("prometheus-md-only")
     ? createPrometheusMdOnlyHook(ctx)
     : null;
@@ -272,6 +268,10 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
       })
     },
   });
+
+  const startWork = isHookEnabled("start-work")
+    ? createStartWorkHook(ctx, { backgroundManager })
+    : null;
 
   const atlasHook = isHookEnabled("atlas")
     ? createAtlasHook(ctx, { directory: ctx.directory, backgroundManager })

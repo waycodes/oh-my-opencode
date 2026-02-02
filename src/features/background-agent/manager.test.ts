@@ -1,10 +1,14 @@
 import { describe, test, expect, beforeEach } from "bun:test"
 import { afterEach, mock } from "bun:test"
 import { tmpdir } from "node:os"
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs"
+import { join } from "node:path"
+import { execSync } from "node:child_process"
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { BackgroundTask, ResumeInput } from "./types"
 import { BackgroundManager } from "./manager"
 import { ConcurrencyManager } from "./concurrency"
+import { captureGitBaseline, computeTaskScopedChanges } from "../../shared/git-change-tracker"
 
 
 const TASK_TTL_MS = 30 * 60 * 1000
@@ -1003,18 +1007,31 @@ describe("BackgroundManager.tryCompleteTask", () => {
 
   test("should auto-launch Argus review when sisyphus-junior completes (enabled, parent Atlas)", async () => {
     // #given
+    const repoDir = mkdtempSync(join(tmpdir(), "argus-auto-review-"))
+    execSync("git init", { cwd: repoDir })
+    execSync("git config user.email \"test@example.com\"", { cwd: repoDir })
+    execSync("git config user.name \"Test User\"", { cwd: repoDir })
+    mkdirSync(join(repoDir, "src"), { recursive: true })
+    writeFileSync(join(repoDir, "src", "foo.ts"), "const foo = 1;\\n", "utf-8")
+    execSync("git add src/foo.ts", { cwd: repoDir })
+    execSync("git commit -m \"init\"", { cwd: repoDir })
+
+    const baseline = captureGitBaseline(repoDir)
+    writeFileSync(join(repoDir, "src", "foo.ts"), "const foo = 1;\\nconst bar = 2;\\n".repeat(6), "utf-8")
+    writeFileSync(join(repoDir, "src", "bar.ts"), "export const bar = 2;\\n".repeat(6), "utf-8")
+
     const client = {
       session: {
         prompt: async () => ({}),
         abort: async () => ({}),
         messages: async () => ({ data: [] }),
-        get: async () => ({ data: { directory: tmpdir() } }),
+        get: async () => ({ data: { directory: repoDir } }),
         create: async () => ({ data: { id: "ses_argus" } }),
       },
     }
     manager.shutdown()
     manager = new BackgroundManager(
-      { client, directory: tmpdir() } as unknown as PluginInput,
+      { client, directory: repoDir } as unknown as PluginInput,
       undefined,
       { argusAutoReviewEnabled: true }
     )
@@ -1045,16 +1062,27 @@ describe("BackgroundManager.tryCompleteTask", () => {
       status: "running",
       startedAt: new Date(),
       parentAgent: "atlas",
+      gitBaseline: baseline,
+      taskDirectory: repoDir,
     }
 
     // #when
-    await tryCompleteTaskForTest(manager, task)
+    const changeSet = computeTaskScopedChanges(repoDir, baseline)
+    try {
+      await tryCompleteTaskForTest(manager, task)
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true })
+    }
 
     // #then
-    expect(launchMock).toHaveBeenCalledTimes(1)
-    const launchArgs = launchMock.mock.calls[0]?.[0] as any
-    expect(launchArgs.agent).toBe("argus")
-    expect(launchArgs.parentSessionID).toBe("session-parent")
+    if (changeSet.isTrivial) {
+      expect(launchMock).toHaveBeenCalledTimes(0)
+    } else {
+      expect(launchMock).toHaveBeenCalledTimes(1)
+      const launchArgs = launchMock.mock.calls[0]?.[0] as any
+      expect(launchArgs.agent).toBe("argus")
+      expect(launchArgs.parentSessionID).toBe("session-parent")
+    }
   })
 
   test("should NOT auto-launch Argus review when disabled", async () => {

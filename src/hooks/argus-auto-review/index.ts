@@ -2,6 +2,8 @@ import type { PluginInput } from "@opencode-ai/plugin"
 import type { BackgroundManager } from "../../features/background-agent"
 import { isCallerOrchestrator } from "../../shared/session-utils"
 import { log } from "../../shared/logger"
+import { captureGitBaseline, computeTaskScopedChanges, type GitBaseline } from "../../shared/git-change-tracker"
+import { registerArgusReview } from "../../features/review-gate"
 
 type ToolExecuteAfterInput = {
   tool: string
@@ -13,30 +15,6 @@ type ToolExecuteAfterOutput = {
   title: string
   output: string
   metadata: Record<string, unknown>
-}
-
-function parseChangedFilesFromAtlasOutput(text: string): string[] {
-  const lines = (text ?? "").split("\n")
-  const idx = lines.findIndex((l) => l.trim() === "[FILE CHANGES SUMMARY]")
-  if (idx === -1) return []
-
-  const files = new Set<string>()
-  for (let i = idx + 1; i < lines.length; i++) {
-    const line = lines[i]
-    const trimmed = line.trim()
-    if (trimmed === "") continue
-    if (trimmed === "---" || trimmed.startsWith("<system-reminder>")) break
-    if (trimmed.endsWith(":") || trimmed.startsWith("[") || trimmed.startsWith("##")) {
-      continue
-    }
-
-    const match = line.match(/^\s{2}(.+?)\s{2}\((?:\+\d+(?:,\s-\d+)?|-\d+)\)\s*$/)
-    if (!match) continue
-    const path = match[1]?.trim()
-    if (path) files.add(path)
-  }
-
-  return Array.from(files)
 }
 
 function formatFileList(files: string[], max: number): string {
@@ -52,6 +30,7 @@ function formatFileList(files: string[], max: number): string {
 
 function buildArgusPrompt(args: {
   changedFiles: string[]
+  diff?: string
   subagentSessionId?: string
   subagentDescription?: string
 }): string {
@@ -67,6 +46,10 @@ function buildArgusPrompt(args: {
     ? `Completed task: ${args.subagentDescription}`
     : "Completed task: (unknown)"
 
+  const diffBlock = args.diff
+    ? `\nDiff (task-scoped, unified=3):\n${args.diff}\n`
+    : "\nDiff: (none)\n"
+
   return `Review the code changes from the just-completed Sisyphus-Junior task.
 
 ${descLine}
@@ -74,9 +57,10 @@ ${sessionLine}
 
 Files to review:
 ${fileList}
+${diffBlock}
 
 Rules:
-- Read each listed file and review for type safety, bugs, security, patterns, error handling, performance.
+- Review ONLY the diff and listed files.
 - Run lsp_diagnostics on the listed files.
 - Return a verdict: [APPROVE] or [REJECT] with specific, actionable issues.`
 }
@@ -86,8 +70,21 @@ export function createArgusAutoReviewHook(
   options: { backgroundManager: Pick<BackgroundManager, "launch"> }
 ) {
   const backgroundManager = options.backgroundManager
+  const baselines = new Map<string, GitBaseline>()
 
   return {
+    "tool.execute.before": async (
+      input: ToolExecuteAfterInput,
+      output: { args: Record<string, unknown> }
+    ): Promise<void> => {
+      if (input.tool.toLowerCase() !== "delegate_task") return
+      if (!isCallerOrchestrator(input.sessionID)) return
+      if (!input.callID) return
+
+      if (!baselines.has(input.callID)) {
+        baselines.set(input.callID, captureGitBaseline(ctx.directory))
+      }
+    },
     "tool.execute.after": async (
       input: ToolExecuteAfterInput,
       output: ToolExecuteAfterOutput
@@ -105,11 +102,24 @@ export function createArgusAutoReviewHook(
       if (!delegatedAgent || delegatedAgent.toLowerCase() !== "sisyphus-junior") return
       if (runInBackground) return
 
-      const outputStr = typeof output.output === "string" ? output.output : ""
-      const changedFiles = parseChangedFilesFromAtlasOutput(outputStr)
+      const baseline = input.callID ? baselines.get(input.callID) : undefined
+      if (input.callID) {
+        baselines.delete(input.callID)
+      }
+      const changeSet = computeTaskScopedChanges(ctx.directory, baseline ?? { dirtyFiles: new Map() })
+
+      if (changeSet.isTrivial) {
+        output.output += `\n\n<system-reminder>
+[ARGUS AUTO-REVIEW SKIPPED]
+Reason: ${changeSet.trivialReason ?? "Trivial change"}
+Files: ${changeSet.files.length > 0 ? changeSet.files.join(", ") : "(none)"}
+</system-reminder>`
+        return
+      }
 
       const prompt = buildArgusPrompt({
-        changedFiles,
+        changedFiles: changeSet.files,
+        diff: changeSet.diff,
         subagentSessionId,
         subagentDescription: description,
       })
@@ -124,7 +134,16 @@ export function createArgusAutoReviewHook(
           parentAgent: "atlas",
         })
 
-        const fileList = formatFileList(changedFiles, 10)
+        registerArgusReview({
+          taskId: task.id,
+          parentSessionId: input.sessionID ?? "",
+          subagentSessionId,
+          description,
+          files: changeSet.files,
+          diff: changeSet.diff,
+        })
+
+        const fileList = formatFileList(changeSet.files, 10)
         output.output += `\n\n<system-reminder>
 [ARGUS AUTO-REVIEW LAUNCHED]
 Task ID: \`${task.id}\`
@@ -138,7 +157,7 @@ Do NOT mark this task complete until Argus returns [APPROVE].
           parentSessionID: input.sessionID,
           delegatedAgent,
           taskId: task.id,
-          fileCount: changedFiles.length,
+          fileCount: changeSet.files.length,
         })
       } catch (err) {
         output.output += `\n\n<system-reminder>

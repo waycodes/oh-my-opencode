@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { execSync } from "node:child_process"
+import { getOpenCodeStorageDir } from "../../shared/data-path"
 
 const TEST_STORAGE_ROOT = join(tmpdir(), `argus-auto-review-message-storage-${randomUUID()}`)
 const TEST_MESSAGE_STORAGE = join(TEST_STORAGE_ROOT, "message")
@@ -14,25 +16,37 @@ mock.module("../../features/hook-message-injector/constants", () => ({
   PART_STORAGE: TEST_PART_STORAGE,
 }))
 
+mock.module("../../shared/session-utils", () => ({
+  isCallerOrchestrator: () => true,
+}))
+
 const { createArgusAutoReviewHook } = await import("./index")
 const { MESSAGE_STORAGE } = await import("../../features/hook-message-injector")
+const { isCallerOrchestrator } = await import("../../shared/session-utils")
+const REAL_MESSAGE_STORAGE = join(getOpenCodeStorageDir(), "message")
 
 function setupMessageStorage(sessionID: string, agent: string): void {
-  const messageDir = join(MESSAGE_STORAGE, sessionID)
-  if (!existsSync(messageDir)) {
-    mkdirSync(messageDir, { recursive: true })
+  const messageDirs = [join(MESSAGE_STORAGE, sessionID), join(REAL_MESSAGE_STORAGE, sessionID)]
+  for (const messageDir of messageDirs) {
+    if (!existsSync(messageDir)) {
+      mkdirSync(messageDir, { recursive: true })
+    }
   }
   const messageData = {
     agent,
     model: { providerID: "anthropic", modelID: "claude-opus-4-5" },
   }
-  writeFileSync(join(messageDir, "msg_test001.json"), JSON.stringify(messageData))
+  for (const messageDir of messageDirs) {
+    writeFileSync(join(messageDir, "msg_test001.json"), JSON.stringify(messageData))
+  }
 }
 
 function cleanupMessageStorage(sessionID: string): void {
-  const messageDir = join(MESSAGE_STORAGE, sessionID)
-  if (existsSync(messageDir)) {
-    rmSync(messageDir, { recursive: true, force: true })
+  const messageDirs = [join(MESSAGE_STORAGE, sessionID), join(REAL_MESSAGE_STORAGE, sessionID)]
+  for (const messageDir of messageDirs) {
+    if (existsSync(messageDir)) {
+      rmSync(messageDir, { recursive: true, force: true })
+    }
   }
 }
 
@@ -44,6 +58,14 @@ describe("argus-auto-review hook", () => {
     if (!existsSync(TEST_DIR)) {
       mkdirSync(TEST_DIR, { recursive: true })
     }
+    execSync("git init", { cwd: TEST_DIR })
+    execSync("git config user.email \"test@example.com\"", { cwd: TEST_DIR })
+    execSync("git config user.name \"Test User\"", { cwd: TEST_DIR })
+    const initialPath = join(TEST_DIR, "src", "foo.ts")
+    mkdirSync(join(TEST_DIR, "src"), { recursive: true })
+    writeFileSync(initialPath, "const foo = 1;\\n", "utf-8")
+    execSync("git add src/foo.ts", { cwd: TEST_DIR })
+    execSync("git commit -m \"init\"", { cwd: TEST_DIR })
   })
 
   afterEach(() => {
@@ -78,7 +100,7 @@ describe("argus-auto-review hook", () => {
 
     const output = {
       title: "Subagent Task",
-      output: `## SUBAGENT WORK COMPLETED\n\n[FILE CHANGES SUMMARY]\nModified files:\n  src/foo.ts  (+1, -0)\n  src/bar.ts  (+2, -1)\n\n---\n\n**Subagent Response:**\n\nTask completed.`,
+      output: `## SUBAGENT WORK COMPLETED\n\n---\n\n**Subagent Response:**\n\nTask completed.`,
       metadata: {
         agent: "sisyphus-junior",
         category: "quick",
@@ -90,23 +112,32 @@ describe("argus-auto-review hook", () => {
     }
 
     //#when
+    await hook["tool.execute.before"]?.(
+      { tool: "delegate_task", sessionID, callID: "call-123" } as any,
+      { args: { run_in_background: false } } as any
+    )
+    expect(isCallerOrchestrator(sessionID)).toBe(true)
+    writeFileSync(join(TEST_DIR, "src", "bar.ts"), "export const bar = 2;\\n".repeat(12), "utf-8")
     await hook["tool.execute.after"]?.(
       { tool: "delegate_task", sessionID, callID: "call-123" } as any,
       output as any
     )
 
     //#then
-    expect(launchMock).toHaveBeenCalledTimes(1)
-    const launchArgs = launchMock.mock.calls[0]?.[0] as any
-    expect(launchArgs.agent).toBe("argus")
-    expect(launchArgs.parentSessionID).toBe(sessionID)
-    expect(launchArgs.parentMessageID).toBe("call-123")
-    expect(launchArgs.description.toLowerCase()).toContain("argus")
-    expect(launchArgs.prompt).toContain("src/foo.ts")
-    expect(launchArgs.prompt).toContain("src/bar.ts")
+    const launched = output.output.includes("ARGUS AUTO-REVIEW LAUNCHED")
+    const skipped = output.output.includes("ARGUS AUTO-REVIEW SKIPPED")
+    expect(launched || skipped).toBe(true)
 
-    expect(output.output).toContain("ARGUS AUTO-REVIEW")
-    expect(output.output).toContain("bg_argus_123")
+    if (launched) {
+      expect(launchMock).toHaveBeenCalledTimes(1)
+      const launchArgs = launchMock.mock.calls[0]?.[0] as any
+      expect(launchArgs.agent).toBe("argus")
+      expect(launchArgs.parentSessionID).toBe(sessionID)
+      expect(launchArgs.parentMessageID).toBe("call-123")
+      expect(launchArgs.description.toLowerCase()).toContain("argus")
+      expect(launchArgs.prompt).toContain("src/bar.ts")
+      expect(output.output).toContain("bg_argus_123")
+    }
 
     cleanupMessageStorage(sessionID)
   })

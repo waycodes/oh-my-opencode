@@ -41,6 +41,12 @@ export interface BackgroundTask {
   /** Category used for this task (e.g., 'quick', 'visual-engineering') */
   category?: string
 
+  /** Git baseline snapshot for task-scoped change tracking */
+  gitBaseline?: import("../../shared/git-change-tracker").GitBaseline
+
+  /** Directory used for git baselines and diffs */
+  taskDirectory?: string
+
   /** Last message count for stability detection */
   lastMsgCount?: number
   /** Number of consecutive polls with stable message count */

@@ -299,6 +299,8 @@ A task is complete when:
 - [ ] All planned todo items marked done
 - [ ] Diagnostics clean on changed files
 - [ ] Build passes (if applicable)
+- [ ] Argus review approved when code changes are present
+- [ ] Manual verification completed for the change type
 - [ ] User's original request fully addressed
 
 If verification fails:

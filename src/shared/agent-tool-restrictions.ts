@@ -17,6 +17,23 @@ const AGENT_RESTRICTIONS: Record<string, Record<string, boolean>> = {
 
   librarian: EXPLORATION_AGENT_DENYLIST,
 
+  argus: {
+    read: true,
+    lsp_diagnostics: true,
+    write: false,
+    edit: false,
+    task: false,
+    delegate_task: false,
+  },
+
+  momus: {
+    read: true,
+    write: false,
+    edit: false,
+    task: false,
+    delegate_task: false,
+  },
+
   oracle: {
     write: false,
     edit: false,

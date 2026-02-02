@@ -13,6 +13,7 @@ import { log } from "../../shared/logger"
 import { createSystemDirective, SYSTEM_DIRECTIVE_PREFIX, SystemDirectiveTypes } from "../../shared/system-directive"
 import { isCallerOrchestrator, getMessageDir } from "../../shared/session-utils"
 import type { BackgroundManager } from "../../features/background-agent"
+import { getBlockingArgusReviews, getPlanReview, isPlanApproved } from "../../features/review-gate"
 
 export const HOOK_NAME = "atlas"
 
@@ -22,6 +23,10 @@ export const HOOK_NAME = "atlas"
  */
 function isSisyphusPath(filePath: string): boolean {
   return /\.sisyphus[/\\]/.test(filePath)
+}
+
+function isPlanOrTaskPath(filePath: string): boolean {
+  return /\.sisyphus[/\\](plans|tasks)[/\\]/.test(filePath)
 }
 
 const WRITE_EDIT_TOOLS = ["Write", "Edit", "write", "edit"]
@@ -203,6 +208,18 @@ If you were NOT given **exactly ONE atomic task**, you MUST:
 
 **REFUSE multi-task requests. DEMAND single-task clarity.**
 `
+
+function buildArgusGateError(pending: { taskId: string }[]): string {
+  const ids = pending.map((p) => `- \`${p.taskId}\``).join("\n")
+  return `ARGUS REVIEW REQUIRED: Completion is blocked until Argus returns [APPROVE].\n\nPending Argus task(s):\n${ids}\n\nWait for completion notification, then read the review with background_output.`
+}
+
+function buildPlanGateError(planPath: string, reviewTaskId?: string): string {
+  const reviewLine = reviewTaskId
+    ? `Momus task: \`${reviewTaskId}\` (use background_output to read verdict)`
+    : "Momus review task not found (re-run Momus plan review)"
+  return `PLAN REVIEW REQUIRED: Momus must approve the plan before execution.\n\nPlan: ${planPath}\n${reviewLine}\n\nWait for [OKAY] before delegating work.`
+}
 
 function buildVerificationReminder(sessionId: string): string {
    return `${VERIFICATION_REMINDER}
@@ -651,6 +668,37 @@ export function createAtlasHook(
     ): Promise<void> => {
       if (!isCallerOrchestrator(input.sessionID)) {
         return
+      }
+
+      const boulderState = readBoulderState(ctx.directory)
+      if (boulderState && !isPlanApproved(boulderState.active_plan)) {
+        if (input.tool.toLowerCase() === "delegate_task") {
+          const subagentType = output.args.subagent_type as string | undefined
+          if (subagentType?.toLowerCase() === "momus") {
+            return
+          }
+          const planReview = getPlanReview(boulderState.active_plan)
+          throw new Error(buildPlanGateError(boulderState.active_plan, planReview?.taskId))
+        }
+      }
+
+      const pendingArgus = input.sessionID ? getBlockingArgusReviews(input.sessionID) : []
+      if (pendingArgus.length > 0) {
+        const toolLower = input.tool.toLowerCase()
+        if (WRITE_EDIT_TOOLS.includes(input.tool)) {
+          const filePath = (output.args.filePath ?? output.args.path ?? output.args.file) as string | undefined
+          if (filePath && isPlanOrTaskPath(filePath)) {
+            throw new Error(buildArgusGateError(pendingArgus))
+          }
+        }
+        if (toolLower === "todowrite") {
+          const todos = output.args.todos as Array<{ status?: string }> | undefined
+          const attemptsCompletion = Array.isArray(todos)
+            && todos.some(t => String(t.status ?? "").toLowerCase() === "completed")
+          if (attemptsCompletion) {
+            throw new Error(buildArgusGateError(pendingArgus))
+          }
+        }
       }
 
       // Check Write/Edit tools for orchestrator - inject strong warning

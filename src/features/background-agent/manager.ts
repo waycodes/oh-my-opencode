@@ -22,9 +22,10 @@ import {
 import { subagentSessions } from "../claude-code-session-state"
 import { getTaskToastManager } from "../task-toast-manager"
 import { findNearestMessageWithFields, MESSAGE_STORAGE } from "../hook-message-injector"
-import { execSync } from "node:child_process"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import { captureGitBaseline, computeTaskScopedChanges, type TaskChangeSet } from "../../shared/git-change-tracker"
+import { registerArgusReview, setArgusReviewVerdict, extractArgusVerdict, extractMomusVerdict, extractPlanPath, setPlanReviewVerdict } from "../review-gate"
 
 type ProcessCleanupEvent = NodeJS.Signals | "beforeExit" | "exit"
 
@@ -237,6 +238,11 @@ export class BackgroundManager {
     })
     const parentDirectory = parentSession?.data?.directory ?? this.directory
     log(`[background-agent] Parent dir: ${parentSession?.data?.directory}, using: ${parentDirectory}`)
+
+    task.taskDirectory = parentDirectory
+    if (input.agent?.toLowerCase() === "sisyphus-junior") {
+      task.gitBaseline = captureGitBaseline(parentDirectory)
+    }
 
     const createResult = await this.client.session.create({
       body: {
@@ -972,6 +978,14 @@ export class BackgroundManager {
       }).catch(() => {})
     }
 
+    if (task.sessionID) {
+      try {
+        await this.updateReviewGateFromTaskOutput(task)
+      } catch (err) {
+        log("[background-agent] Failed to update review gate", { taskId: task.id, error: String(err) })
+      }
+    }
+
     if (this.argusAutoReviewEnabled) {
       try {
         await this.maybeLaunchArgusAutoReview(task)
@@ -991,55 +1005,24 @@ export class BackgroundManager {
     return true
   }
 
-  private getGitChangedFiles(): string[] {
-    try {
-      const files = new Set<string>()
-      const diff = execSync("git diff --name-only HEAD", {
-        cwd: this.directory,
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim()
-
-      if (diff) {
-        for (const line of diff.split("\n")) {
-          const p = line.trim()
-          if (p) files.add(p)
-        }
-      }
-
-      const status = execSync("git status --porcelain", {
-        cwd: this.directory,
-        encoding: "utf-8",
-        timeout: 5000,
-        stdio: ["pipe", "pipe", "pipe"],
-      }).trim()
-
-      if (status) {
-        for (const line of status.split("\n")) {
-          if (!line) continue
-          const rawPath = line.substring(3).trim()
-          const path = rawPath.includes(" -> ")
-            ? rawPath.split(" -> ").pop()?.trim() ?? ""
-            : rawPath
-          if (path) files.add(path)
-        }
-      }
-
-      return Array.from(files)
-    } catch {
-      return []
-    }
+  private getTaskChangeSet(task: BackgroundTask): TaskChangeSet {
+    const directory = task.taskDirectory ?? this.directory
+    const baseline = task.gitBaseline ?? { dirtyFiles: new Map() }
+    return computeTaskScopedChanges(directory, baseline)
   }
 
-  private buildArgusAutoReviewPrompt(task: BackgroundTask, changedFiles: string[]): string {
-    const fileList = changedFiles.length > 0
-      ? changedFiles.map((f) => `- ${f}`).join("\n")
+  private buildArgusAutoReviewPrompt(task: BackgroundTask, changeSet: TaskChangeSet): string {
+    const fileList = changeSet.files.length > 0
+      ? changeSet.files.map((f) => `- ${f}`).join("\n")
       : "- (no file list available - infer from git status/diff)"
 
     const sessionLine = task.sessionID
       ? `Completed subagent session: ${task.sessionID}`
       : "Completed subagent session: (unknown)"
+
+    const diffBlock = changeSet.diff
+      ? `\nDiff (task-scoped, unified=3):\n${changeSet.diff}\n`
+      : "\nDiff: (none)\n"
 
     return `Review the code changes from a completed background Sisyphus-Junior task.
 
@@ -1048,9 +1031,9 @@ ${sessionLine}
 
 Files to review:
 ${fileList}
-
+${diffBlock}
 Rules:
-- Read each listed file and review for type safety, bugs, security, patterns, error handling, performance.
+- Review ONLY the diff and listed files.
 - Run lsp_diagnostics on the listed files.
 - Return a verdict: [APPROVE] or [REJECT] with specific, actionable issues.`
   }
@@ -1061,11 +1044,15 @@ Rules:
     if (task.status !== "completed") return
     if (agent !== "sisyphus-junior") return
     if (parentAgent !== "atlas") return
+    const changeSet = this.getTaskChangeSet(task)
+    if (changeSet.isTrivial) {
+      await this.notifyArgusSkip(task, changeSet)
+      return
+    }
 
-    const changedFiles = this.getGitChangedFiles()
-    const prompt = this.buildArgusAutoReviewPrompt(task, changedFiles)
+    const prompt = this.buildArgusAutoReviewPrompt(task, changeSet)
 
-    await this.launch({
+    const argusTask = await this.launch({
       description: `Argus auto-review: ${task.description}`,
       prompt,
       agent: "argus",
@@ -1074,6 +1061,150 @@ Rules:
       parentModel: task.parentModel,
       parentAgent: task.parentAgent,
     })
+
+    registerArgusReview({
+      taskId: argusTask.id,
+      parentSessionId: task.parentSessionID,
+      subagentSessionId: task.sessionID,
+      description: task.description,
+      files: changeSet.files,
+      diff: changeSet.diff,
+    })
+
+    await this.notifyArgusLaunch(task, argusTask.id, changeSet)
+  }
+
+  private async getLatestAssistantText(sessionID: string): Promise<string> {
+    const response = await this.client.session.messages({ path: { id: sessionID } })
+    const messages = (response.data ?? []) as Array<{
+      info?: { role?: string }
+      parts?: Array<{ type?: string; text?: string; content?: string | Array<{ type?: string; text?: string }> }>
+    }>
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
+      if (msg.info?.role !== "assistant") continue
+      const parts = msg.parts ?? []
+      const text = parts.map((p) => {
+        if (p?.type === "text" || p?.type === "reasoning") {
+          return p.text ?? ""
+        }
+        if (Array.isArray(p?.content)) {
+          return p.content.map(c => c.text ?? "").join("")
+        }
+        if (typeof p?.content === "string") {
+          return p.content
+        }
+        return ""
+      }).join("\n").trim()
+      if (text) return text
+    }
+
+    return ""
+  }
+
+  private async updateReviewGateFromTaskOutput(task: BackgroundTask): Promise<void> {
+    const agent = task.agent?.toLowerCase()
+    if (!task.sessionID) return
+
+    if (agent !== "argus" && agent !== "momus") return
+
+    const text = await this.getLatestAssistantText(task.sessionID)
+
+    if (agent === "argus") {
+      const verdict = extractArgusVerdict(text) ?? "failed"
+      setArgusReviewVerdict(task.id, verdict)
+      return
+    }
+
+    const verdict = extractMomusVerdict(text) ?? "failed"
+    const planPath = extractPlanPath(task.prompt ?? "") ?? extractPlanPath(text)
+    if (!planPath) return
+
+    setPlanReviewVerdict({
+      planPath,
+      verdict,
+      sessionId: task.parentSessionID,
+      taskId: task.id,
+    })
+  }
+
+  private async resolveParentContext(task: BackgroundTask): Promise<{ agent?: string; model?: { providerID: string; modelID: string } }> {
+    let agent: string | undefined = task.parentAgent
+    let model: { providerID: string; modelID: string } | undefined
+
+    try {
+      const messagesResp = await this.client.session.messages({ path: { id: task.parentSessionID } })
+      const messages = (messagesResp.data ?? []) as Array<{
+        info?: { agent?: string; model?: { providerID: string; modelID: string }; modelID?: string; providerID?: string }
+      }>
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const info = messages[i].info
+        if (info?.agent || info?.model || (info?.modelID && info?.providerID)) {
+          agent = info.agent ?? task.parentAgent
+          model = info.model ?? (info.providerID && info.modelID ? { providerID: info.providerID, modelID: info.modelID } : undefined)
+          break
+        }
+      }
+    } catch {
+      const messageDir = getMessageDir(task.parentSessionID)
+      const currentMessage = messageDir ? findNearestMessageWithFields(messageDir) : null
+      agent = currentMessage?.agent ?? task.parentAgent
+      model = currentMessage?.model?.providerID && currentMessage?.model?.modelID
+        ? { providerID: currentMessage.model.providerID, modelID: currentMessage.model.modelID }
+        : undefined
+    }
+
+    return { agent, model }
+  }
+
+  private async notifyArgusLaunch(task: BackgroundTask, argusTaskId: string, changeSet: TaskChangeSet): Promise<void> {
+    const fileList = changeSet.files.length > 0
+      ? changeSet.files.slice(0, 10).map(f => `- ${f}`).join("\n")
+      : "- (no files detected)"
+    const remaining = changeSet.files.length - Math.min(changeSet.files.length, 10)
+    const fileListText = remaining > 0 ? `${fileList}\n- ...and ${remaining} more` : fileList
+
+    const text = `<system-reminder>
+[ARGUS AUTO-REVIEW LAUNCHED]
+Task ID: \`${argusTaskId}\`
+Files:
+${fileListText}
+
+Wait for completion notification, then inspect the review.
+Do NOT mark this task complete until Argus returns [APPROVE].
+</system-reminder>`
+
+    const { agent, model } = await this.resolveParentContext(task)
+    await this.client.session.prompt({
+      path: { id: task.parentSessionID },
+      body: {
+        noReply: true,
+        ...(agent !== undefined ? { agent } : {}),
+        ...(model !== undefined ? { model } : {}),
+        parts: [{ type: "text", text }],
+      },
+    }).catch(() => {})
+  }
+
+  private async notifyArgusSkip(task: BackgroundTask, changeSet: TaskChangeSet): Promise<void> {
+    const reason = changeSet.trivialReason ?? "Trivial change"
+    const notification = `<system-reminder>
+[ARGUS AUTO-REVIEW SKIPPED]
+Reason: ${reason}
+Files: ${changeSet.files.length > 0 ? changeSet.files.join(", ") : "(none)"}
+</system-reminder>`
+
+    const { agent, model } = await this.resolveParentContext(task)
+    await this.client.session.prompt({
+      path: { id: task.parentSessionID },
+      body: {
+        noReply: true,
+        ...(agent !== undefined ? { agent } : {}),
+        ...(model !== undefined ? { model } : {}),
+        parts: [{ type: "text", text: notification }],
+      },
+    }).catch(() => {})
   }
 
   private async notifyParentSession(task: BackgroundTask): Promise<void> {

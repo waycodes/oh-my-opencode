@@ -11,6 +11,8 @@ import {
 } from "../../features/boulder-state"
 import { log } from "../../shared/logger"
 import { getSessionAgent, updateSessionAgent } from "../../features/claude-code-session-state"
+import type { BackgroundManager } from "../../features/background-agent"
+import { isPlanApproved, registerPlanReview } from "../../features/review-gate"
 
 export const HOOK_NAME = "start-work"
 
@@ -46,7 +48,7 @@ function findPlanByName(plans: string[], requestedName: string): string | null {
   return partialMatch || null
 }
 
-export function createStartWorkHook(ctx: PluginInput) {
+export function createStartWorkHook(ctx: PluginInput, options?: { backgroundManager?: BackgroundManager }) {
   return {
     "chat.message": async (
       input: StartWorkHookInput,
@@ -78,6 +80,7 @@ export function createStartWorkHook(ctx: PluginInput) {
       const timestamp = new Date().toISOString()
 
       let contextInfo = ""
+      let activePlanPath: string | null = null
       
       const explicitPlanName = extractUserRequestPlanName(promptText)
       
@@ -104,6 +107,7 @@ All ${progress.total} tasks are done. Create a new plan with: /plan "your task"`
             }
             const newState = createBoulderState(matchedPlan, sessionId)
             writeBoulderState(ctx.directory, newState)
+            activePlanPath = matchedPlan
             
             contextInfo = `
 ## Auto-Selected Plan
@@ -146,6 +150,7 @@ No incomplete plans available. Create a new plan with: /plan "your task"`
         
         if (!progress.isComplete) {
           appendSessionId(ctx.directory, sessionId)
+          activePlanPath = existingState.active_plan
           contextInfo = `
 ## Active Work Session Found
 
@@ -189,6 +194,7 @@ All ${plans.length} plan(s) are complete. Create a new plan with: /plan "your ta
           const progress = getPlanProgress(planPath)
           const newState = createBoulderState(planPath, sessionId)
           writeBoulderState(ctx.directory, newState)
+          activePlanPath = planPath
 
           contextInfo += `
 
@@ -221,6 +227,29 @@ ${planList}
 
 Ask the user which plan to work on. Present the options above and wait for their response.
 </system-reminder>`
+        }
+      }
+
+      if (activePlanPath && options?.backgroundManager && !isPlanApproved(activePlanPath)) {
+        try {
+          const task = await options.backgroundManager.launch({
+            description: `Momus plan review: ${getPlanName(activePlanPath)}`,
+            prompt: activePlanPath,
+            agent: "momus",
+            parentSessionID: sessionId,
+            parentMessageID: input.messageID ?? "",
+            parentAgent: "atlas",
+          })
+
+          registerPlanReview({
+            planPath: activePlanPath,
+            sessionId,
+            taskId: task.id,
+          })
+
+          contextInfo += `\n\n<system-reminder>\n[PLAN REVIEW LAUNCHED]\nMomus task: ${task.id}\nPlan: ${activePlanPath}\nWait for [OKAY] before delegating work.\n</system-reminder>`
+        } catch (err) {
+          log(`[${HOOK_NAME}] Failed to launch Momus review`, { sessionID: sessionId, error: String(err) })
         }
       }
 
