@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from "bun:test"
-import { afterEach } from "bun:test"
+import { afterEach, mock } from "bun:test"
 import { tmpdir } from "node:os"
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { BackgroundTask, ResumeInput } from "./types"
@@ -999,6 +999,102 @@ describe("BackgroundManager.tryCompleteTask", () => {
 
     // #then
     expect(abortedSessionIDs).toEqual(["session-1"])
+  })
+
+  test("should auto-launch Argus review when sisyphus-junior completes (enabled, parent Atlas)", async () => {
+    // #given
+    const client = {
+      session: {
+        prompt: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({ data: [] }),
+        get: async () => ({ data: { directory: tmpdir() } }),
+        create: async () => ({ data: { id: "ses_argus" } }),
+      },
+    }
+    manager.shutdown()
+    manager = new BackgroundManager(
+      { client, directory: tmpdir() } as unknown as PluginInput,
+      undefined,
+      { argusAutoReviewEnabled: true }
+    )
+
+    const launchMock = mock(async (input: any) => {
+      return {
+        id: "bg_argus_1",
+        status: "pending",
+        queuedAt: new Date(),
+        description: input.description,
+        prompt: input.prompt,
+        agent: input.agent,
+        parentSessionID: input.parentSessionID,
+        parentMessageID: input.parentMessageID,
+      }
+    })
+    ;(manager as unknown as { launch: unknown }).launch = launchMock as unknown
+    stubNotifyParentSession(manager)
+
+    const task: BackgroundTask = {
+      id: "task-argus-trigger",
+      sessionID: "session-argus-trigger",
+      parentSessionID: "session-parent",
+      parentMessageID: "msg-1",
+      description: "write docs",
+      prompt: "test",
+      agent: "sisyphus-junior",
+      status: "running",
+      startedAt: new Date(),
+      parentAgent: "atlas",
+    }
+
+    // #when
+    await tryCompleteTaskForTest(manager, task)
+
+    // #then
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    const launchArgs = launchMock.mock.calls[0]?.[0] as any
+    expect(launchArgs.agent).toBe("argus")
+    expect(launchArgs.parentSessionID).toBe("session-parent")
+  })
+
+  test("should NOT auto-launch Argus review when disabled", async () => {
+    // #given
+    const client = {
+      session: {
+        prompt: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({ data: [] }),
+      },
+    }
+    manager.shutdown()
+    manager = new BackgroundManager(
+      { client, directory: tmpdir() } as unknown as PluginInput,
+      undefined,
+      { argusAutoReviewEnabled: false }
+    )
+
+    const launchMock = mock(async () => ({ id: "bg_argus_1" }))
+    ;(manager as unknown as { launch: unknown }).launch = launchMock as unknown
+    stubNotifyParentSession(manager)
+
+    const task: BackgroundTask = {
+      id: "task-no-argus",
+      sessionID: "session-no-argus",
+      parentSessionID: "session-parent",
+      parentMessageID: "msg-1",
+      description: "write docs",
+      prompt: "test",
+      agent: "sisyphus-junior",
+      status: "running",
+      startedAt: new Date(),
+      parentAgent: "atlas",
+    }
+
+    // #when
+    await tryCompleteTaskForTest(manager, task)
+
+    // #then
+    expect(launchMock).toHaveBeenCalledTimes(0)
   })
 })
 

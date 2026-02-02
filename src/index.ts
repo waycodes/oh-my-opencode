@@ -29,6 +29,7 @@ import {
   createTaskResumeInfoHook,
   createStartWorkHook,
   createAtlasHook,
+  createArgusAutoReviewHook,
   createPrometheusMdOnlyHook,
   createSisyphusJuniorNotepadHook,
   createQuestionLabelTruncatorHook,
@@ -246,6 +247,7 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
 
   const backgroundManager = new BackgroundManager(ctx, pluginConfig.background_task, {
     tmuxConfig,
+    argusAutoReviewEnabled: isHookEnabled("argus-auto-review"),
     onSubagentSessionCreated: async (event) => {
       log("[index] onSubagentSessionCreated callback received", {
         sessionID: event.sessionID,
@@ -273,6 +275,10 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
 
   const atlasHook = isHookEnabled("atlas")
     ? createAtlasHook(ctx, { directory: ctx.directory, backgroundManager })
+    : null;
+
+  const argusAutoReviewHook = isHookEnabled("argus-auto-review")
+    ? createArgusAutoReviewHook(ctx, { backgroundManager })
     : null;
 
   initTaskToastManager(ctx.client);
@@ -750,12 +756,13 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
       await directoryReadmeInjector?.["tool.execute.after"](input, output);
       await rulesInjector?.["tool.execute.after"](input, output);
       await emptyTaskResponseDetector?.["tool.execute.after"](input, output);
-      await agentUsageReminder?.["tool.execute.after"](input, output);
-      await categorySkillReminder?.["tool.execute.after"](input, output);
-      await interactiveBashSession?.["tool.execute.after"](input, output);
-await editErrorRecovery?.["tool.execute.after"](input, output);
-        await delegateTaskRetry?.["tool.execute.after"](input, output);
-        await atlasHook?.["tool.execute.after"]?.(input, output);
+      await agentUsageReminder?.["tool.execute.after"]?.(input, output);
+      await categorySkillReminder?.["tool.execute.after"]?.(input, output);
+      await interactiveBashSession?.["tool.execute.after"]?.(input, output);
+      await editErrorRecovery?.["tool.execute.after"]?.(input, output);
+      await delegateTaskRetry?.["tool.execute.after"]?.(input, output);
+      await atlasHook?.["tool.execute.after"]?.(input, output);
+      await argusAutoReviewHook?.["tool.execute.after"]?.(input, output);
       await taskResumeInfo["tool.execute.after"](input, output);
     },
 

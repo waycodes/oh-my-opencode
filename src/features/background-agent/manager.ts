@@ -22,6 +22,7 @@ import {
 import { subagentSessions } from "../claude-code-session-state"
 import { getTaskToastManager } from "../task-toast-manager"
 import { findNearestMessageWithFields, MESSAGE_STORAGE } from "../hook-message-injector"
+import { execSync } from "node:child_process"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 
@@ -84,6 +85,7 @@ export class BackgroundManager {
   private tmuxEnabled: boolean
   private onSubagentSessionCreated?: OnSubagentSessionCreated
   private onShutdown?: () => void
+  private argusAutoReviewEnabled: boolean
 
   private queuesByKey: Map<string, QueueItem[]> = new Map()
   private processingKeys: Set<string> = new Set()
@@ -96,6 +98,7 @@ export class BackgroundManager {
       tmuxConfig?: TmuxConfig
       onSubagentSessionCreated?: OnSubagentSessionCreated
       onShutdown?: () => void
+      argusAutoReviewEnabled?: boolean
     }
   ) {
     this.tasks = new Map()
@@ -108,6 +111,7 @@ export class BackgroundManager {
     this.tmuxEnabled = options?.tmuxConfig?.enabled ?? false
     this.onSubagentSessionCreated = options?.onSubagentSessionCreated
     this.onShutdown = options?.onShutdown
+    this.argusAutoReviewEnabled = options?.argusAutoReviewEnabled ?? false
     this.registerProcessCleanup()
   }
 
@@ -968,6 +972,14 @@ export class BackgroundManager {
       }).catch(() => {})
     }
 
+    if (this.argusAutoReviewEnabled) {
+      try {
+        await this.maybeLaunchArgusAutoReview(task)
+      } catch (err) {
+        log("[background-agent] Argus auto-review launch failed", { taskId: task.id, error: String(err) })
+      }
+    }
+
     try {
       await this.notifyParentSession(task)
       log(`[background-agent] Task completed via ${source}:`, task.id)
@@ -977,6 +989,91 @@ export class BackgroundManager {
     }
 
     return true
+  }
+
+  private getGitChangedFiles(): string[] {
+    try {
+      const files = new Set<string>()
+      const diff = execSync("git diff --name-only HEAD", {
+        cwd: this.directory,
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim()
+
+      if (diff) {
+        for (const line of diff.split("\n")) {
+          const p = line.trim()
+          if (p) files.add(p)
+        }
+      }
+
+      const status = execSync("git status --porcelain", {
+        cwd: this.directory,
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim()
+
+      if (status) {
+        for (const line of status.split("\n")) {
+          if (!line) continue
+          const rawPath = line.substring(3).trim()
+          const path = rawPath.includes(" -> ")
+            ? rawPath.split(" -> ").pop()?.trim() ?? ""
+            : rawPath
+          if (path) files.add(path)
+        }
+      }
+
+      return Array.from(files)
+    } catch {
+      return []
+    }
+  }
+
+  private buildArgusAutoReviewPrompt(task: BackgroundTask, changedFiles: string[]): string {
+    const fileList = changedFiles.length > 0
+      ? changedFiles.map((f) => `- ${f}`).join("\n")
+      : "- (no file list available - infer from git status/diff)"
+
+    const sessionLine = task.sessionID
+      ? `Completed subagent session: ${task.sessionID}`
+      : "Completed subagent session: (unknown)"
+
+    return `Review the code changes from a completed background Sisyphus-Junior task.
+
+Completed task: ${task.description}
+${sessionLine}
+
+Files to review:
+${fileList}
+
+Rules:
+- Read each listed file and review for type safety, bugs, security, patterns, error handling, performance.
+- Run lsp_diagnostics on the listed files.
+- Return a verdict: [APPROVE] or [REJECT] with specific, actionable issues.`
+  }
+
+  private async maybeLaunchArgusAutoReview(task: BackgroundTask): Promise<void> {
+    const agent = task.agent?.toLowerCase()
+    const parentAgent = task.parentAgent?.toLowerCase()
+    if (task.status !== "completed") return
+    if (agent !== "sisyphus-junior") return
+    if (parentAgent !== "atlas") return
+
+    const changedFiles = this.getGitChangedFiles()
+    const prompt = this.buildArgusAutoReviewPrompt(task, changedFiles)
+
+    await this.launch({
+      description: `Argus auto-review: ${task.description}`,
+      prompt,
+      agent: "argus",
+      parentSessionID: task.parentSessionID,
+      parentMessageID: task.parentMessageID,
+      parentModel: task.parentModel,
+      parentAgent: task.parentAgent,
+    })
   }
 
   private async notifyParentSession(task: BackgroundTask): Promise<void> {

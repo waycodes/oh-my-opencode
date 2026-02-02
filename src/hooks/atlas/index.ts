@@ -69,9 +69,15 @@ const VERIFICATION_REMINDER = `**MANDATORY: WHAT YOU MUST DO RIGHT NOW**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**STEP 0: INVOKE ARGUS CODE REVIEW (REQUIRED)**
+**STEP 0: ARGUS AUTO-REVIEW (REQUIRED)**
 
-Before ANY manual verification, invoke Argus to review the code changes:
+Argus should be launched automatically after each Sisyphus-Junior completion.
+
+Look for one of these in the output:
+- \`[ARGUS AUTO-REVIEW LAUNCHED]\` (contains a Task ID)
+- \`[ARGUS AUTO-REVIEW FAILED]\`
+
+If Argus did NOT launch (failed or missing), run it manually:
 
 \`\`\`
 delegate_task(
