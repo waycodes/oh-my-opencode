@@ -34,6 +34,7 @@ flowchart TB
     
     subgraph Workers["Worker Layer (Specialized Agents)"]
         Junior["🪨 Sisyphus-Junior<br/>(Task Executor)<br/>Claude Sonnet 4.5"]
+        Argus["🦉 Argus<br/>(Reviewer)<br/>GPT-5.2"]
         Oracle["🧠 Oracle<br/>(Architecture)<br/>GPT-5.2"]
         Explore["🔍 Explore<br/>(Codebase Grep)<br/>Grok Code"]
         Librarian["📚 Librarian<br/>(Docs/OSS)<br/>GLM-4.7"]
@@ -55,8 +56,10 @@ flowchart TB
     Orchestrator -->|"delegate_task(agent)"| Explore
     Orchestrator -->|"delegate_task(agent)"| Librarian
     Orchestrator -->|"delegate_task(agent)"| Frontend
+    Orchestrator -->|"delegate_task(agent)"| Argus
     
     Junior -->|"Results + Learnings"| Orchestrator
+    Argus -->|"Review verdict"| Orchestrator
     Oracle -->|"Advice"| Orchestrator
     Explore -->|"Code patterns"| Orchestrator
     Librarian -->|"Documentation"| Orchestrator
@@ -166,15 +169,17 @@ flowchart LR
         Wisdom["3. Accumulate Wisdom"]
         Delegate["4. Delegate Tasks"]
         Verify["5. Verify Results"]
-        Report["6. Final Report"]
+        Review["6. Argus Review Gate"]
+        Report["7. Final Report"]
     end
     
     Read --> Analyze
     Analyze --> Wisdom
     Wisdom --> Delegate
     Delegate --> Verify
-    Verify -->|"More tasks"| Delegate
-    Verify -->|"All done"| Report
+    Verify --> Review
+    Review -->|"Rejected"| Delegate
+    Review -->|"Approved"| Report
     
     Delegate -->|"background=false"| Workers["Workers"]
     Workers -->|"Results + Learnings"| Verify
@@ -354,6 +359,7 @@ sequenceDiagram
     participant User
     participant Orchestrator as Atlas
     participant Junior as Sisyphus-Junior
+    participant Argus as Argus
     participant Notepad as .sisyphus/notepads/
     
     User->>Orchestrator: /start-work
@@ -375,9 +381,12 @@ sequenceDiagram
         Orchestrator->>Orchestrator: Verify independently
         Note over Orchestrator: NEVER trust subagent claims<br/>Run lsp_diagnostics at PROJECT level<br/>Run full test suite<br/>Read actual changed files
         
-        alt Verification fails
+        Orchestrator->>Argus: Review task-scoped diff
+        Argus->>Orchestrator: [APPROVE] or [REJECT]
+        
+        alt Verification fails or Argus rejects
             Orchestrator->>Junior: Re-delegate with failure context
-        else Verification passes
+        else Verification passes and Argus approves
             Orchestrator->>Orchestrator: Mark task complete, continue
         end
     end

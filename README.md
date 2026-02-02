@@ -227,6 +227,18 @@ Just by installing this, you make your agents to work like:
 1. Honestly, don't even bother reading the docs. Just write your prompt. Include the 'ultrawork' keyword. Sisyphus will analyze the structure, gather the context, dig through external source code, and just keep bouldering until the job is 100% complete.
 1. Actually, typing 'ultrawork' is too much effort. Just type 'ulw'. Just ulw. Sip your coffee. Your work is done.
 
+Here’s the core review loop (now with Argus as a hard gate):
+
+```mermaid
+flowchart LR
+    User --> Sisyphus["Sisyphus (Orchestrator)"]
+    Sisyphus --> Junior["Sisyphus-Junior (Executor)"]
+    Junior --> Argus["Argus (Reviewer)"]
+    Argus -->|[REJECT]| Junior
+    Argus -->|[APPROVE]| Sisyphus
+    Sisyphus --> Done["Done"]
+```
+
 Need to look something up? It scours official docs, your entire codebase history, and public GitHub implementations—using not just grep but built-in LSP tools and AST-Grep.
 3. Stop worrying about context management when delegating to LLMs. I've got it covered.
     - OhMyOpenCode aggressively leverages multiple agents to lighten the context load.
