@@ -69,6 +69,25 @@ const VERIFICATION_REMINDER = `**MANDATORY: WHAT YOU MUST DO RIGHT NOW**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+**STEP 0: INVOKE ARGUS CODE REVIEW (REQUIRED)**
+
+Before ANY manual verification, invoke Argus to review the code changes:
+
+\`\`\`
+delegate_task(
+  subagent_type="argus",
+  load_skills=[],
+  prompt="Review the following files that were just modified: [LIST FILES FROM CHANGES ABOVE]. Check for type safety, bugs, security issues, and pattern violations.",
+  run_in_background=false
+)
+\`\`\`
+
+**Argus will return [APPROVE] or [REJECT]:**
+- **[APPROVE]** → Proceed to Step 1 (manual verification)
+- **[REJECT]** → Fix the issues first using \`delegate_task(session_id="...", prompt="fix: [specific issues]")\`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 CRITICAL: Subagents FREQUENTLY LIE about completion.
 Tests FAILING, code has ERRORS, implementation INCOMPLETE - but they say "done".
 
@@ -102,7 +121,7 @@ todowrite([
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**BLOCKING: DO NOT proceed to Step 4 until Steps 1-3 are VERIFIED.**`
+**BLOCKING: DO NOT proceed to Step 4 until Argus APPROVES and Steps 1-3 are VERIFIED.**`
 
 const ORCHESTRATOR_DELEGATION_REQUIRED = `
 
