@@ -1058,10 +1058,40 @@ Rules:
 
   private async maybeLaunchArgusAutoReview(task: BackgroundTask): Promise<void> {
     const agent = task.agent?.toLowerCase()
-    if (task.status !== "completed") return
-    if (!agent) return
-    if (agent === "argus" || agent === "momus") return
+    log("[background-agent] maybeLaunchArgusAutoReview called", {
+      taskId: task.id,
+      agent,
+      status: task.status,
+      hasBaseline: !!task.gitBaseline,
+    })
+
+    if (task.status !== "completed") {
+      log("[background-agent] Argus skip: task not completed", { taskId: task.id, status: task.status })
+      return
+    }
+    if (!agent) {
+      log("[background-agent] Argus skip: no agent", { taskId: task.id })
+      return
+    }
+    if (agent === "argus" || agent === "momus") {
+      log("[background-agent] Argus skip: is reviewer agent", { taskId: task.id, agent })
+      return
+    }
+
+    // Only trigger Argus for code-changing agents, not read-only exploration agents
+    const CODE_CHANGING_AGENTS = new Set(["sisyphus-junior", "hephaestus", "atlas", "sisyphus"])
+    if (!CODE_CHANGING_AGENTS.has(agent)) {
+      log("[background-agent] Argus skip: read-only agent", { taskId: task.id, agent })
+      return
+    }
+
     const changeSet = this.getTaskChangeSet(task)
+    log("[background-agent] Argus change detection", {
+      taskId: task.id,
+      isTrivial: changeSet.isTrivial,
+      trivialReason: changeSet.trivialReason,
+      fileCount: changeSet.files.length,
+    })
     if (changeSet.isTrivial) {
       if (changeSet.trivialReason === "No task-scoped changes detected" && task.parentSessionID) {
         const committed = computeCommittedChangesSinceBaseline(this.directory, task.gitBaseline ?? { dirtyFiles: new Map() })
@@ -1120,6 +1150,13 @@ Rules:
     }
 
     const prompt = this.buildArgusAutoReviewPrompt(task, changeSet)
+
+    log("[background-agent] Launching Argus auto-review for background task", {
+      taskId: task.id,
+      agent: task.agent,
+      fileCount: changeSet.files.length,
+      parentSessionID: task.parentSessionID,
+    })
 
     const argusTask = await this.launch({
       description: `Argus auto-review: ${task.description}`,

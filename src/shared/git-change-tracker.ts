@@ -52,6 +52,8 @@ function getHeadCommit(directory: string): string | null {
 
 function hashFile(filePath: string): string | null {
   if (!existsSync(filePath)) return null
+  const stat = statSync(filePath)
+  if (!stat.isFile()) return null
   const buf = readFileSync(filePath)
   return createHash("sha1").update(buf).digest("hex")
 }

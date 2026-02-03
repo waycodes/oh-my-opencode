@@ -326,6 +326,62 @@ describe("argus-auto-review hook", () => {
     cleanupMessageStorage(sessionID)
   })
 
+  test("should launch Argus review for committed fallback after todowrite completion", async () => {
+    //#given
+    const sessionID = `session-${randomUUID()}`
+    setupMessageStorage(sessionID, "atlas")
+
+    const launchMock = mock(async (input: any) => {
+      return {
+        id: "bg_argus_555",
+        status: "pending",
+        queuedAt: new Date(),
+        description: input.description,
+        prompt: input.prompt,
+        agent: input.agent,
+        parentSessionID: input.parentSessionID,
+        parentMessageID: input.parentMessageID,
+      }
+    })
+
+    const hook = createArgusAutoReviewHook(
+      { directory: TEST_DIR } as any,
+      { backgroundManager: { launch: launchMock } as any }
+    )
+
+    //#when
+    await hook["tool.execute.before"]?.(
+      { tool: "todowrite", sessionID, callID: "call-todo-commit" } as any,
+      { args: { todos: [{ id: "1", content: "done", status: "completed", priority: "high" }] } } as any
+    )
+
+    writeFileSync(join(TEST_DIR, "src", "commit.ts"), "export const commit = 1;\\n".repeat(3), "utf-8")
+    execSync("git add src/commit.ts", { cwd: TEST_DIR })
+    execSync("git commit -m \"add commit\"", { cwd: TEST_DIR })
+
+    const output = {
+      title: "Todos",
+      output: "ok",
+      metadata: {},
+    }
+
+    await hook["tool.execute.after"]?.(
+      { tool: "todowrite", sessionID, callID: "call-todo-commit" } as any,
+      output as any
+    )
+
+    //#then
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    const launchArgs = launchMock.mock.calls[0]?.[0] as any
+    expect(launchArgs.agent).toBe("argus")
+    expect(launchArgs.parentSessionID).toBe(sessionID)
+    expect(launchArgs.prompt).toContain("committed range")
+    expect(launchArgs.prompt).toContain("src/commit.ts")
+    expect(output.output).toContain("Mode: committed fallback")
+
+    cleanupMessageStorage(sessionID)
+  })
+
   test("should launch Argus review after plan checkbox completion", async () => {
     //#given
     const sessionID = `session-${randomUUID()}`

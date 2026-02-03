@@ -90,6 +90,7 @@ import { createConfigHandler } from "./plugin-handlers";
 
 const OhMyOpenCodePlugin: Plugin = async (ctx) => {
   log("[OhMyOpenCodePlugin] ENTRY - plugin loading", { directory: ctx.directory })
+  console.log("\n🔧 [oh-my-opencode] Plugin loaded from LOCAL DEV build\n")
   // Start background tmux check immediately
   startTmuxCheck();
 

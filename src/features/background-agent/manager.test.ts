@@ -1124,6 +1124,65 @@ describe("BackgroundManager.tryCompleteTask", () => {
     // #then
     expect(launchMock).toHaveBeenCalledTimes(0)
   })
+
+  test("should NOT auto-launch Argus review for read-only agents (explore, librarian)", async () => {
+    // #given
+    const repoDir = mkdtempSync(join(tmpdir(), "argus-readonly-"))
+    execSync("git init", { cwd: repoDir })
+    execSync("git config user.email \"test@example.com\"", { cwd: repoDir })
+    execSync("git config user.name \"Test User\"", { cwd: repoDir })
+    writeFileSync(join(repoDir, "foo.ts"), "const foo = 1;\\n", "utf-8")
+    execSync("git add foo.ts", { cwd: repoDir })
+    execSync("git commit -m \"init\"", { cwd: repoDir })
+
+    const baseline = captureGitBaseline(repoDir)
+    // Simulate changes that would normally trigger Argus
+    writeFileSync(join(repoDir, "foo.ts"), "const foo = 1;\\nconst bar = 2;\\n".repeat(6), "utf-8")
+
+    const client = {
+      session: {
+        prompt: async () => ({}),
+        abort: async () => ({}),
+        messages: async () => ({ data: [] }),
+        get: async () => ({ data: { directory: repoDir } }),
+      },
+    }
+    manager.shutdown()
+    manager = new BackgroundManager(
+      { client, directory: repoDir } as unknown as PluginInput,
+      undefined,
+      { argusAutoReviewEnabled: true }
+    )
+
+    const launchMock = mock(async () => ({ id: "bg_argus_1" }))
+    ;(manager as unknown as { launch: unknown }).launch = launchMock as unknown
+    stubNotifyParentSession(manager)
+
+    const task: BackgroundTask = {
+      id: "task-explore",
+      sessionID: "session-explore",
+      parentSessionID: "session-parent",
+      parentMessageID: "msg-1",
+      description: "explore codebase",
+      prompt: "test",
+      agent: "explore",  // Read-only agent
+      status: "running",
+      startedAt: new Date(),
+      parentAgent: "atlas",
+      gitBaseline: baseline,
+      taskDirectory: repoDir,
+    }
+
+    // #when
+    try {
+      await tryCompleteTaskForTest(manager, task)
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true })
+    }
+
+    // #then - explore is read-only, should NOT trigger Argus even with changes
+    expect(launchMock).toHaveBeenCalledTimes(0)
+  })
 })
 
 describe("BackgroundManager.trackTask", () => {

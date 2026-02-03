@@ -63,12 +63,17 @@ export function getLocalDevPath(directory: string): string | null {
       const plugins = config.plugin ?? []
 
       for (const entry of plugins) {
+        // file:// URL with package name
         if (entry.startsWith("file://") && entry.includes(PACKAGE_NAME)) {
           try {
             return fileURLToPath(entry)
           } catch {
             return entry.replace("file://", "")
           }
+        }
+        // Absolute path (starts with / or drive letter on Windows)
+        if ((entry.startsWith("/") || /^[a-zA-Z]:/.test(entry)) && entry.includes(PACKAGE_NAME)) {
+          return entry
         }
       }
     } catch {

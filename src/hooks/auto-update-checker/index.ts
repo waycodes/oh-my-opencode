@@ -76,6 +76,9 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
         const localDevVersion = getLocalDevVersion(ctx.directory)
         const displayVersion = localDevVersion ?? cachedVersion
 
+        // Debug: always log what we detected
+        log(`[auto-update-checker] Startup check - localDevVersion: ${localDevVersion}, cachedVersion: ${cachedVersion}, directory: ${ctx.directory}`)
+
         await showConfigErrorsIfAny(ctx)
         await showModelCacheWarningIfNeeded(ctx)
         await updateAndShowConnectedProvidersCacheStatus(ctx)
@@ -84,6 +87,8 @@ export function createAutoUpdateCheckerHook(ctx: PluginInput, options: AutoUpdat
           if (showStartupToast) {
             showLocalDevToast(ctx, displayVersion, isSisyphusEnabled).catch(() => {})
           }
+          // More visible console output for local dev
+          console.log(`\n🔧 [oh-my-opencode] LOCAL DEV MODE: v${displayVersion}\n`)
           log("[auto-update-checker] Local development mode")
           return
         }

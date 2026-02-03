@@ -28,6 +28,7 @@ type CompletionCandidate = {
   kind: "todowrite" | "sisyphus-file"
   filePath?: string
   completedCount?: number
+  baseline?: GitBaseline
 }
 
 const WRITE_EDIT_TOOLS = new Set(["Write", "Edit", "write", "edit"])
@@ -148,7 +149,10 @@ export function createArgusAutoReviewHook(
         const attemptsCompletion = Array.isArray(todos)
           && todos.some(t => String(t.status ?? "").toLowerCase() === "completed")
         if (attemptsCompletion) {
-          completionCandidates.set(input.callID, { kind: "todowrite" })
+          completionCandidates.set(input.callID, {
+            kind: "todowrite",
+            baseline: captureGitBaseline(ctx.directory),
+          })
         }
         return
       }
@@ -161,6 +165,7 @@ export function createArgusAutoReviewHook(
             kind: "sisyphus-file",
             filePath,
             completedCount: countCompletedCheckboxes(beforeText),
+            baseline: captureGitBaseline(ctx.directory),
           })
         }
       }
@@ -173,10 +178,76 @@ export function createArgusAutoReviewHook(
       if (!isCallerOrchestrator(input.sessionID)) return
       const toolLower = input.tool.toLowerCase()
 
-      const launchCompletionReview = async (reason: string): Promise<void> => {
+      const launchCompletionReview = async (reason: string, baseline?: GitBaseline): Promise<void> => {
         if (!input.sessionID) return
         const changeSet = computeTaskScopedChanges(ctx.directory, { dirtyFiles: new Map() })
         if (changeSet.isTrivial) {
+          if (
+            shouldFallbackToCommittedChanges(changeSet)
+            && baseline
+            && input.sessionID
+          ) {
+            const committed = computeCommittedChangesSinceBaseline(ctx.directory, baseline)
+            if (committed) {
+              const alreadyReviewed = hasArgusReviewedCommitRange(input.sessionID, committed.baseCommit, committed.headCommit)
+              if (alreadyReviewed) {
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW SKIPPED]\nReason: Committed changes already reviewed\nCommit range: ${committed.commitRange}\nFiles: ${committed.files.length > 0 ? committed.files.join(", ") : "(none)"}\n</system-reminder>`
+                )
+                return
+              }
+
+              const prompt = buildArgusPrompt({
+                changedFiles: committed.files,
+                diff: committed.diff,
+                subagentDescription: reason,
+                subagentType: "completion-marker",
+                commitRange: committed.commitRange,
+              })
+
+              try {
+                const task = await backgroundManager.launch({
+                  description: `Argus auto-review (committed fallback): ${reason}`,
+                  prompt,
+                  agent: "argus",
+                  parentSessionID: input.sessionID ?? "",
+                  parentMessageID: input.callID ?? "",
+                })
+
+                registerArgusReview({
+                  taskId: task.id,
+                  parentSessionId: input.sessionID ?? "",
+                  description: reason,
+                  files: committed.files,
+                  diff: committed.diff,
+                  commitRange: committed.commitRange,
+                  baseCommit: committed.baseCommit,
+                  headCommit: committed.headCommit,
+                })
+
+                const fileList = formatFileList(committed.files, 10)
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW LAUNCHED]\nMode: committed fallback\nCommit range: ${committed.commitRange}\nTask ID: \`${task.id}\`\nFiles:\n${fileList}\n\nWait for completion notification, then inspect the review.\nDo NOT mark this task complete until Argus returns [APPROVE].\n</system-reminder>`
+                )
+
+                log("[argus-auto-review] Argus review launched (completion commit fallback)", {
+                  parentSessionID: input.sessionID,
+                  taskId: task.id,
+                  fileCount: committed.files.length,
+                })
+                return
+              } catch (err) {
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW FAILED]\nFailed to launch Argus review: ${String(err)}\n</system-reminder>`
+                )
+                log("[argus-auto-review] Failed to launch Argus review (completion commit fallback)", { error: String(err) })
+                return
+              }
+            }
+          }
           appendOutput(
             output,
             `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW SKIPPED]\nReason: ${changeSet.trivialReason ?? "Trivial change"}\nFiles: ${changeSet.files.length > 0 ? changeSet.files.join(", ") : "(none)"}\n</system-reminder>`
@@ -373,7 +444,7 @@ export function createArgusAutoReviewHook(
         const candidate = completionCandidates.get(input.callID)
         completionCandidates.delete(input.callID)
         if (candidate?.kind === "todowrite") {
-          await launchCompletionReview("todo completion")
+          await launchCompletionReview("todo completion", candidate.baseline)
         }
         return
       }
@@ -386,7 +457,7 @@ export function createArgusAutoReviewHook(
           const afterCount = countCompletedCheckboxes(afterText)
           const beforeCount = candidate.completedCount ?? 0
           if (afterCount > beforeCount) {
-            await launchCompletionReview("plan/task completion")
+            await launchCompletionReview("plan/task completion", candidate.baseline)
           }
         }
       }
