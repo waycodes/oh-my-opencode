@@ -31,6 +31,7 @@ export { createTaskResumeInfoHook } from "./task-resume-info";
 export { createStartWorkHook } from "./start-work";
 export { createAtlasHook } from "./atlas";
 export { createArgusAutoReviewHook } from "./argus-auto-review";
+export { createArgusCommitGuardHook } from "./argus-commit-guard";
 export { createDelegateTaskRetryHook } from "./delegate-task-retry";
 export { createQuestionLabelTruncatorHook } from "./question-label-truncator";
 export { createSubagentQuestionBlockerHook } from "./subagent-question-blocker";

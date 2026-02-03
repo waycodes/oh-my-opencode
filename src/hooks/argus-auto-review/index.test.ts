@@ -144,6 +144,69 @@ describe("argus-auto-review hook", () => {
     cleanupMessageStorage(sessionID)
   })
 
+  test("should launch Argus review for committed fallback when no task-scoped changes detected", async () => {
+    //#given
+    const sessionID = `session-${randomUUID()}`
+    setupMessageStorage(sessionID, "atlas")
+
+    const launchMock = mock(async (input: any) => {
+      return {
+        id: "bg_argus_999",
+        status: "pending",
+        queuedAt: new Date(),
+        description: input.description,
+        prompt: input.prompt,
+        agent: input.agent,
+        parentSessionID: input.parentSessionID,
+        parentMessageID: input.parentMessageID,
+      }
+    })
+
+    const hook = createArgusAutoReviewHook(
+      { directory: TEST_DIR } as any,
+      { backgroundManager: { launch: launchMock } as any }
+    )
+
+    const output = {
+      title: "Subagent Task",
+      output: `## SUBAGENT WORK COMPLETED\n\n---\n\n**Subagent Response:**\n\nTask completed.`,
+      metadata: {
+        agent: "hephaestus",
+        category: "quick",
+        description: "Implement bar",
+        run_in_background: false,
+        sessionId: "ses_subagent_999",
+        sync: true,
+      },
+    }
+
+    //#when
+    await hook["tool.execute.before"]?.(
+      { tool: "delegate_task", sessionID, callID: "call-999" } as any,
+      { args: { run_in_background: false } } as any
+    )
+
+    writeFileSync(join(TEST_DIR, "src", "bar.ts"), "export const bar = 2;\\n".repeat(3), "utf-8")
+    execSync("git add src/bar.ts", { cwd: TEST_DIR })
+    execSync("git commit -m \"add bar\"", { cwd: TEST_DIR })
+
+    await hook["tool.execute.after"]?.(
+      { tool: "delegate_task", sessionID, callID: "call-999" } as any,
+      output as any
+    )
+
+    //#then
+    expect(launchMock).toHaveBeenCalledTimes(1)
+    const launchArgs = launchMock.mock.calls[0]?.[0] as any
+    expect(launchArgs.agent).toBe("argus")
+    expect(launchArgs.parentSessionID).toBe(sessionID)
+    expect(launchArgs.prompt).toContain("committed range")
+    expect(launchArgs.prompt).toContain("src/bar.ts")
+    expect(output.output).toContain("Mode: committed fallback")
+
+    cleanupMessageStorage(sessionID)
+  })
+
   test("should not launch when caller is not Atlas", async () => {
     //#given
     const sessionID = `session-${randomUUID()}`

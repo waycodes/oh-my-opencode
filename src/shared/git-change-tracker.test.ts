@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execSync } from "node:child_process"
-import { captureGitBaseline, computeTaskScopedChanges } from "./git-change-tracker"
+import { captureGitBaseline, computeTaskScopedChanges, computeCommittedChangesSinceBaseline } from "./git-change-tracker"
 
 function initRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "git-change-tracker-"))
@@ -65,6 +65,33 @@ describe("git-change-tracker", () => {
       //#then
       expect(changeSet.files).toContain("README.md")
       expect(changeSet.isTrivial).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("captures committed changes since baseline", () => {
+    //#given
+    const dir = initRepo()
+    try {
+      writeFileSync(join(dir, "a.txt"), "one\n", "utf-8")
+      git(dir, "git add a.txt")
+      git(dir, "git commit -m \"init\"")
+
+      const baseline = captureGitBaseline(dir)
+
+      writeFileSync(join(dir, "b.txt"), "two\nthree\n", "utf-8")
+      git(dir, "git add b.txt")
+      git(dir, "git commit -m \"add b\"")
+
+      //#when
+      const committed = computeCommittedChangesSinceBaseline(dir, baseline)
+
+      //#then
+      expect(committed).not.toBeNull()
+      expect(committed?.files).toContain("b.txt")
+      expect(committed?.commitRange).toContain("..")
+      expect(committed?.diff).toContain("b.txt")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

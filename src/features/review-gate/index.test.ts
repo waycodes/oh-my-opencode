@@ -4,6 +4,7 @@ import {
   registerArgusReview,
   setArgusReviewVerdict,
   getBlockingArgusReviews,
+  hasApprovedArgusReview,
   registerPlanReview,
   setPlanReviewVerdict,
   isPlanApproved,
@@ -31,6 +32,26 @@ describe("review-gate", () => {
 
     //#then
     expect(getBlockingArgusReviews("ses_1").length).toBe(0)
+  })
+
+  test("reports approved Argus reviews by session", () => {
+    //#given
+    resetReviewGateForTest()
+    registerArgusReview({
+      taskId: "bg_argus_2",
+      parentSessionId: "ses_2",
+      description: "Review task",
+      files: ["src/a.ts"],
+    })
+
+    //#then
+    expect(hasApprovedArgusReview("ses_2")).toBe(false)
+
+    //#when
+    setArgusReviewVerdict("bg_argus_2", "approved")
+
+    //#then
+    expect(hasApprovedArgusReview("ses_2")).toBe(true)
   })
 
   test("tracks plan approval via Momus", () => {

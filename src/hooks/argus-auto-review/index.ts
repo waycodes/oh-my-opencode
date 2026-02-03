@@ -4,8 +4,13 @@ import { isAbsolute, join } from "node:path"
 import type { BackgroundManager } from "../../features/background-agent"
 import { isCallerOrchestrator } from "../../shared/session-utils"
 import { log } from "../../shared/logger"
-import { captureGitBaseline, computeTaskScopedChanges, type GitBaseline } from "../../shared/git-change-tracker"
-import { registerArgusReview } from "../../features/review-gate"
+import {
+  captureGitBaseline,
+  computeTaskScopedChanges,
+  computeCommittedChangesSinceBaseline,
+  type GitBaseline,
+} from "../../shared/git-change-tracker"
+import { hasArgusReviewedCommitRange, registerArgusReview } from "../../features/review-gate"
 
 type ToolExecuteAfterInput = {
   tool: string
@@ -67,6 +72,7 @@ function buildArgusPrompt(args: {
   subagentSessionId?: string
   subagentDescription?: string
   subagentType?: string
+  commitRange?: string
 }): string {
   const fileList = args.changedFiles.length > 0
     ? args.changedFiles.map((f) => `- ${f}`).join("\n")
@@ -80,8 +86,11 @@ function buildArgusPrompt(args: {
     ? `Completed task: ${args.subagentDescription}`
     : "Completed task: (unknown)"
 
+  const diffLabel = args.commitRange
+    ? `Diff (committed range ${args.commitRange}, unified=3):`
+    : "Diff (task-scoped, unified=3):"
   const diffBlock = args.diff
-    ? `\nDiff (task-scoped, unified=3):\n${args.diff}\n`
+    ? `\n${diffLabel}\n${args.diff}\n`
     : "\nDiff: (none)\n"
 
   const agentLine = args.subagentType
@@ -102,6 +111,12 @@ Rules:
 - Review ONLY the diff and listed files.
 - Run lsp_diagnostics on the listed files.
 - Return a verdict: [APPROVE] or [REJECT] with specific, actionable issues.`
+}
+
+function shouldFallbackToCommittedChanges(changeSet: { isTrivial: boolean; files: string[]; trivialReason?: string }): boolean {
+  if (!changeSet.isTrivial) return false
+  if (changeSet.files.length > 0) return false
+  return changeSet.trivialReason === "No task-scoped changes detected"
 }
 
 export function createArgusAutoReviewHook(
@@ -232,6 +247,72 @@ export function createArgusAutoReviewHook(
         const changeSet = computeTaskScopedChanges(ctx.directory, baseline ?? { dirtyFiles: new Map() })
 
         if (changeSet.isTrivial) {
+          if (shouldFallbackToCommittedChanges(changeSet) && baseline && input.sessionID) {
+            const committed = computeCommittedChangesSinceBaseline(ctx.directory, baseline)
+            if (committed) {
+              const alreadyReviewed = hasArgusReviewedCommitRange(input.sessionID, committed.baseCommit, committed.headCommit)
+              if (alreadyReviewed) {
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW SKIPPED]\nReason: Committed changes already reviewed\nCommit range: ${committed.commitRange}\nFiles: ${committed.files.length > 0 ? committed.files.join(", ") : "(none)"}\n</system-reminder>`
+                )
+                return
+              }
+
+              const prompt = buildArgusPrompt({
+                changedFiles: committed.files,
+                diff: committed.diff,
+                subagentSessionId,
+                subagentDescription: description,
+                subagentType: delegatedAgent,
+                commitRange: committed.commitRange,
+              })
+
+              try {
+                const task = await backgroundManager.launch({
+                  description: `Argus auto-review (committed fallback): ${description ?? "subagent task"}`,
+                  prompt,
+                  agent: "argus",
+                  parentSessionID: input.sessionID ?? "",
+                  parentMessageID: input.callID ?? "",
+                  parentAgent: "atlas",
+                })
+
+                registerArgusReview({
+                  taskId: task.id,
+                  parentSessionId: input.sessionID ?? "",
+                  subagentSessionId,
+                  description,
+                  files: committed.files,
+                  diff: committed.diff,
+                  commitRange: committed.commitRange,
+                  baseCommit: committed.baseCommit,
+                  headCommit: committed.headCommit,
+                })
+
+                const fileList = formatFileList(committed.files, 10)
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW LAUNCHED]\nMode: committed fallback\nCommit range: ${committed.commitRange}\nTask ID: \`${task.id}\`\nFiles:\n${fileList}\n\nWait for completion notification, then inspect the review.\nDo NOT mark this task complete until Argus returns [APPROVE].\n</system-reminder>`
+                )
+
+                log("[argus-auto-review] Argus review launched (commit fallback)", {
+                  parentSessionID: input.sessionID,
+                  delegatedAgent,
+                  taskId: task.id,
+                  fileCount: committed.files.length,
+                })
+                return
+              } catch (err) {
+                appendOutput(
+                  output,
+                  `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW FAILED]\nFailed to launch Argus review: ${String(err)}\n</system-reminder>`
+                )
+                log("[argus-auto-review] Failed to launch Argus review (commit fallback)", { error: String(err) })
+                return
+              }
+            }
+          }
           appendOutput(
             output,
             `\n\n<system-reminder>\n[ARGUS AUTO-REVIEW SKIPPED]\nReason: ${changeSet.trivialReason ?? "Trivial change"}\nFiles: ${changeSet.files.length > 0 ? changeSet.files.join(", ") : "(none)"}\n</system-reminder>`

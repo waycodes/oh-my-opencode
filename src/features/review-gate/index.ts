@@ -7,6 +7,9 @@ export interface ArgusReviewRecord {
   description?: string
   files?: string[]
   diff?: string
+  commitRange?: string
+  baseCommit?: string
+  headCommit?: string
   verdict: ReviewVerdict
   createdAt: Date
   updatedAt: Date
@@ -32,6 +35,9 @@ export function registerArgusReview(input: {
   description?: string
   files?: string[]
   diff?: string
+  commitRange?: string
+  baseCommit?: string
+  headCommit?: string
 }): ArgusReviewRecord {
   const now = new Date()
   const record: ArgusReviewRecord = {
@@ -41,6 +47,9 @@ export function registerArgusReview(input: {
     description: input.description,
     files: input.files,
     diff: input.diff,
+    commitRange: input.commitRange,
+    baseCommit: input.baseCommit,
+    headCommit: input.headCommit,
     verdict: "pending",
     createdAt: now,
     updatedAt: now,
@@ -52,6 +61,23 @@ export function registerArgusReview(input: {
   argusBySession.set(record.parentSessionId, set)
 
   return record
+}
+
+export function hasArgusReviewedCommitRange(
+  sessionId: string,
+  baseCommit: string,
+  headCommit: string
+): boolean {
+  const ids = argusBySession.get(sessionId)
+  if (!ids) return false
+  for (const id of ids) {
+    const rec = argusByTask.get(id)
+    if (!rec) continue
+    if (rec.baseCommit === baseCommit && rec.headCommit === headCommit) {
+      return true
+    }
+  }
+  return false
 }
 
 export function setArgusReviewVerdict(taskId: string, verdict: ReviewVerdict): void {
@@ -77,6 +103,17 @@ export function getBlockingArgusReviews(sessionId: string): ArgusReviewRecord[] 
 
 export function getArgusReview(taskId: string): ArgusReviewRecord | undefined {
   return argusByTask.get(taskId)
+}
+
+export function hasApprovedArgusReview(sessionId: string): boolean {
+  const ids = argusBySession.get(sessionId)
+  if (!ids) return false
+  for (const id of ids) {
+    const rec = argusByTask.get(id)
+    if (!rec) continue
+    if (rec.verdict === "approved") return true
+  }
+  return false
 }
 
 export function registerPlanReview(input: {

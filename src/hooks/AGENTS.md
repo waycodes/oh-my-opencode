@@ -34,6 +34,8 @@ hooks/
 ├── prometheus-md-only/         # Planner read-only mode
 ├── agent-usage-reminder/       # Specialized agent hints
 ├── auto-update-checker/        # Plugin update check
+├── argus-auto-review/          # Auto-review via Argus
+├── argus-commit-guard/         # Blocks git commit before Argus approval
 ├── tool-output-truncator.ts    # Prevents context bloat
 ├── compaction-context-injector/ # Injects context on compaction
 ├── delegate-task-retry/        # Retries failed delegations
@@ -61,7 +63,7 @@ hooks/
 
 ## EXECUTION ORDER
 - **UserPromptSubmit**: keywordDetector → claudeCodeHooks → autoSlashCommand → startWork
-- **PreToolUse**: subagentQuestionBlocker → questionLabelTruncator → claudeCodeHooks → nonInteractiveEnv → commentChecker → directoryAgentsInjector → directoryReadmeInjector → rulesInjector → prometheusMdOnly → sisyphusJuniorNotepad → atlasHook
+- **PreToolUse**: subagentQuestionBlocker → questionLabelTruncator → claudeCodeHooks → nonInteractiveEnv → argusCommitGuard → commentChecker → directoryAgentsInjector → directoryReadmeInjector → rulesInjector → prometheusMdOnly → sisyphusJuniorNotepad → atlasHook
 - **PostToolUse**: claudeCodeHooks → toolOutputTruncator → contextWindowMonitor → commentChecker → directoryAgentsInjector → directoryReadmeInjector → rulesInjector → emptyTaskResponseDetector → agentUsageReminder → interactiveBashSession → editErrorRecovery → delegateTaskRetry → atlasHook → taskResumeInfo
 
 ## HOW TO ADD

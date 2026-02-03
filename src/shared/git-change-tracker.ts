@@ -5,6 +5,7 @@ import { join } from "node:path"
 
 export interface GitBaseline {
   dirtyFiles: Map<string, { hash: string | null }>
+  headCommit?: string | null
 }
 
 export interface GitFileStat {
@@ -44,6 +45,11 @@ function safeExec(cmd: string, cwd: string): string {
   }
 }
 
+function getHeadCommit(directory: string): string | null {
+  const head = safeExec("git rev-parse HEAD", directory)
+  return head ? head.trim() : null
+}
+
 function hashFile(filePath: string): string | null {
   if (!existsSync(filePath)) return null
   const buf = readFileSync(filePath)
@@ -77,6 +83,35 @@ function parseStatus(cwd: string): Map<string, "modified" | "added" | "deleted">
     if (status === "A" || status === "??") {
       statusMap.set(path, "added")
     } else if (status === "D") {
+      statusMap.set(path, "deleted")
+    } else {
+      statusMap.set(path, "modified")
+    }
+  }
+
+  return statusMap
+}
+
+function parseCommitRangeStatus(cwd: string, commitRange: string): Map<string, "modified" | "added" | "deleted"> {
+  const statusOutput = safeExec(`git diff --name-status ${commitRange}`, cwd)
+  const statusMap = new Map<string, "modified" | "added" | "deleted">()
+  if (!statusOutput) return statusMap
+
+  for (const line of statusOutput.split("\n")) {
+    if (!line) continue
+    const parts = line.split("\t").map(p => p.trim()).filter(Boolean)
+    if (parts.length < 2) continue
+    const rawStatus = parts[0]
+    const statusChar = rawStatus[0]
+    let path = parts[1]
+    if (statusChar === "R" && parts.length >= 3) {
+      path = parts[2]
+    }
+
+    if (!path) continue
+    if (statusChar === "A") {
+      statusMap.set(path, "added")
+    } else if (statusChar === "D") {
       statusMap.set(path, "deleted")
     } else {
       statusMap.set(path, "modified")
@@ -229,6 +264,13 @@ function buildDiffForFiles(cwd: string, files: string[], statusMap: Map<string, 
   return combined.slice(0, MAX_DIFF_CHARS) + "\n... [diff truncated]"
 }
 
+function buildDiffForCommitRange(cwd: string, commitRange: string): string {
+  const diff = safeExec(`git diff --unified=3 ${commitRange}`, cwd)
+  if (!diff) return ""
+  if (diff.length <= MAX_DIFF_CHARS) return diff
+  return diff.slice(0, MAX_DIFF_CHARS) + "\n... [diff truncated]"
+}
+
 function isDocPath(path: string): boolean {
   const lower = path.toLowerCase()
   return lower.startsWith("docs/") || lower.includes("/docs/") || lower.endsWith(".md") || lower.endsWith(".mdx") || lower.startsWith("readme")
@@ -241,7 +283,82 @@ export function captureGitBaseline(directory: string): GitBaseline {
     const fullPath = join(directory, file)
     dirtyFiles.set(file, { hash: hashFile(fullPath) })
   }
-  return { dirtyFiles }
+  return { dirtyFiles, headCommit: getHeadCommit(directory) }
+}
+
+export interface CommitRangeChangeSet extends TaskChangeSet {
+  commitRange: string
+  baseCommit: string
+  headCommit: string
+}
+
+export function computeCommittedChangesSinceBaseline(
+  directory: string,
+  baseline: GitBaseline,
+  options?: { maxLines?: number }
+): CommitRangeChangeSet | null {
+  const baseCommit = baseline.headCommit
+  const headCommit = getHeadCommit(directory)
+  if (!baseCommit || !headCommit) return null
+  if (baseCommit === headCommit) return null
+
+  const commitRange = `${baseCommit}..${headCommit}`
+  const filesRaw = safeExec(`git diff --name-only ${commitRange}`, directory)
+  const files = filesRaw
+    ? filesRaw.split("\n").map(f => f.trim()).filter(Boolean)
+    : []
+
+  if (files.length === 0) return null
+
+  const statusMap = parseCommitRangeStatus(directory, commitRange)
+  const stats = (() => {
+    const diffOutput = safeExec(`git diff --numstat ${commitRange}`, directory)
+    const statsMap = new Map<string, GitFileStat>()
+    if (diffOutput) {
+      for (const line of diffOutput.split("\n")) {
+        const parts = line.split("\t")
+        if (parts.length < 3) continue
+        const [addedStr, removedStr, ...pathParts] = parts
+        const path = pathParts.join("\t").trim()
+        if (!path) continue
+        const added = addedStr === "-" ? 0 : parseInt(addedStr, 10)
+        const removed = removedStr === "-" ? 0 : parseInt(removedStr, 10)
+        const status = statusMap.get(path) ?? "modified"
+        statsMap.set(path, { path, added, removed, status })
+      }
+    }
+
+    for (const file of files) {
+      if (statsMap.has(file)) continue
+      const status = statusMap.get(file) ?? "modified"
+      statsMap.set(file, { path: file, added: 0, removed: 0, status })
+    }
+
+    return Array.from(statsMap.values())
+  })()
+
+  const totalAdded = stats.reduce((sum, s) => sum + s.added, 0)
+  const totalRemoved = stats.reduce((sum, s) => sum + s.removed, 0)
+  const diff = buildDiffForCommitRange(directory, commitRange)
+
+  const maxLines = options?.maxLines ?? DEFAULT_TRIVIAL_MAX_LINES
+  const rawTotalChanged = totalAdded + totalRemoved
+  const totalChanged = rawTotalChanged === 0 && files.length > 0
+    ? maxLines + 1
+    : rawTotalChanged
+
+  return {
+    files: files.sort(),
+    stats,
+    totalAdded,
+    totalRemoved,
+    diff,
+    isTrivial: totalChanged <= 0,
+    trivialReason: totalChanged <= 0 ? "No committed changes detected" : undefined,
+    commitRange,
+    baseCommit,
+    headCommit,
+  }
 }
 
 export function computeTaskScopedChanges(directory: string, baseline: GitBaseline, options?: { maxLines?: number }): TaskChangeSet {

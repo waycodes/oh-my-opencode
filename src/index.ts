@@ -30,6 +30,7 @@ import {
   createStartWorkHook,
   createAtlasHook,
   createArgusAutoReviewHook,
+  createArgusCommitGuardHook,
   createPrometheusMdOnlyHook,
   createSisyphusJuniorNotepadHook,
   createQuestionLabelTruncatorHook,
@@ -279,6 +280,9 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
 
   const argusAutoReviewHook = isHookEnabled("argus-auto-review")
     ? createArgusAutoReviewHook(ctx, { backgroundManager })
+    : null;
+  const argusCommitGuardHook = isHookEnabled("argus-commit-guard")
+    ? createArgusCommitGuardHook(ctx)
     : null;
 
   initTaskToastManager(ctx.client);
@@ -655,6 +659,7 @@ const OhMyOpenCodePlugin: Plugin = async (ctx) => {
       await questionLabelTruncator["tool.execute.before"]?.(input, output);
       await claudeCodeHooks["tool.execute.before"](input, output);
       await nonInteractiveEnv?.["tool.execute.before"](input, output);
+      await argusCommitGuardHook?.["tool.execute.before"]?.(input, output);
       await commentChecker?.["tool.execute.before"](input, output);
       await directoryAgentsInjector?.["tool.execute.before"]?.(input, output);
       await directoryReadmeInjector?.["tool.execute.before"]?.(input, output);

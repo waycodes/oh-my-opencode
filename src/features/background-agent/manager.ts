@@ -24,8 +24,21 @@ import { getTaskToastManager } from "../task-toast-manager"
 import { findNearestMessageWithFields, MESSAGE_STORAGE } from "../hook-message-injector"
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
-import { captureGitBaseline, computeTaskScopedChanges, type TaskChangeSet } from "../../shared/git-change-tracker"
-import { registerArgusReview, setArgusReviewVerdict, extractArgusVerdict, extractMomusVerdict, extractPlanPath, setPlanReviewVerdict } from "../review-gate"
+import {
+  captureGitBaseline,
+  computeTaskScopedChanges,
+  computeCommittedChangesSinceBaseline,
+  type TaskChangeSet,
+} from "../../shared/git-change-tracker"
+import {
+  hasArgusReviewedCommitRange,
+  registerArgusReview,
+  setArgusReviewVerdict,
+  extractArgusVerdict,
+  extractMomusVerdict,
+  extractPlanPath,
+  setPlanReviewVerdict,
+} from "../review-gate"
 
 type ProcessCleanupEvent = NodeJS.Signals | "beforeExit" | "exit"
 
@@ -1021,8 +1034,12 @@ export class BackgroundManager {
       ? `Completed subagent session: ${task.sessionID}`
       : "Completed subagent session: (unknown)"
 
+    const commitRange = (changeSet as { commitRange?: string }).commitRange
+    const diffLabel = commitRange
+      ? `Diff (committed range ${commitRange}, unified=3):`
+      : "Diff (task-scoped, unified=3):"
     const diffBlock = changeSet.diff
-      ? `\nDiff (task-scoped, unified=3):\n${changeSet.diff}\n`
+      ? `\n${diffLabel}\n${changeSet.diff}\n`
       : "\nDiff: (none)\n"
 
     return `Review the code changes from a completed background subagent task.
@@ -1046,6 +1063,58 @@ Rules:
     if (agent === "argus" || agent === "momus") return
     const changeSet = this.getTaskChangeSet(task)
     if (changeSet.isTrivial) {
+      if (changeSet.trivialReason === "No task-scoped changes detected" && task.parentSessionID) {
+        const committed = computeCommittedChangesSinceBaseline(this.directory, task.gitBaseline ?? { dirtyFiles: new Map() })
+        if (committed) {
+          const alreadyReviewed = hasArgusReviewedCommitRange(task.parentSessionID, committed.baseCommit, committed.headCommit)
+          if (alreadyReviewed) {
+            await this.notifyArgusSkip(task, {
+              ...changeSet,
+              trivialReason: `Committed changes already reviewed (${committed.commitRange})`,
+            })
+            return
+          }
+
+          const prompt = this.buildArgusAutoReviewPrompt(task, {
+            ...committed,
+            isTrivial: false,
+          })
+
+          try {
+            const argusTask = await this.launch({
+              description: `Argus auto-review (committed fallback): ${task.description}`,
+              prompt,
+              agent: "argus",
+              parentSessionID: task.parentSessionID,
+              parentMessageID: task.parentMessageID,
+              parentAgent: task.parentAgent,
+            })
+
+            registerArgusReview({
+              taskId: argusTask.id,
+              parentSessionId: task.parentSessionID,
+              subagentSessionId: task.sessionID,
+              description: task.description,
+              files: committed.files,
+              diff: committed.diff,
+              commitRange: committed.commitRange,
+              baseCommit: committed.baseCommit,
+              headCommit: committed.headCommit,
+            })
+
+            await this.notifyArgusLaunch(task, argusTask.id, committed)
+            log("[background-agent] Argus review launched (commit fallback)", {
+              parentSessionID: task.parentSessionID,
+              taskId: argusTask.id,
+              fileCount: committed.files.length,
+            })
+            return
+          } catch (err) {
+            log("[background-agent] Failed to launch Argus review (commit fallback)", { error: String(err) })
+          }
+        }
+      }
+
       await this.notifyArgusSkip(task, changeSet)
       return
     }
