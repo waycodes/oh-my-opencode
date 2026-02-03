@@ -76,7 +76,7 @@ const VERIFICATION_REMINDER = `**MANDATORY: WHAT YOU MUST DO RIGHT NOW**
 
 **STEP 0: ARGUS AUTO-REVIEW (REQUIRED)**
 
-Argus should be launched automatically after each Sisyphus-Junior completion.
+Argus should be launched automatically after each subagent completion.
 
 Look for one of these in the output:
 - \`[ARGUS AUTO-REVIEW LAUNCHED]\` (contains a Task ID)

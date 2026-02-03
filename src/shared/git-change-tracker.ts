@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
 
@@ -121,6 +121,8 @@ function getDirtyFiles(cwd: string): string[] {
 
 function countFileLines(filePath: string): number {
   if (!existsSync(filePath)) return 0
+  const stat = statSync(filePath)
+  if (!stat.isFile()) return 0
   const content = readFileSync(filePath, "utf-8")
   if (content.length === 0) return 0
   return content.split(/\r?\n/).length

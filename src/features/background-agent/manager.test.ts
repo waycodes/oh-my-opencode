@@ -1005,7 +1005,7 @@ describe("BackgroundManager.tryCompleteTask", () => {
     expect(abortedSessionIDs).toEqual(["session-1"])
   })
 
-  test("should auto-launch Argus review when sisyphus-junior completes (enabled, parent Atlas)", async () => {
+  test("should auto-launch Argus review when subagent completes (enabled)", async () => {
     // #given
     const repoDir = mkdtempSync(join(tmpdir(), "argus-auto-review-"))
     execSync("git init", { cwd: repoDir })
@@ -1058,7 +1058,7 @@ describe("BackgroundManager.tryCompleteTask", () => {
       parentMessageID: "msg-1",
       description: "write docs",
       prompt: "test",
-      agent: "sisyphus-junior",
+      agent: "hephaestus",
       status: "running",
       startedAt: new Date(),
       parentAgent: "atlas",

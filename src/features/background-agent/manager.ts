@@ -240,7 +240,8 @@ export class BackgroundManager {
     log(`[background-agent] Parent dir: ${parentSession?.data?.directory}, using: ${parentDirectory}`)
 
     task.taskDirectory = parentDirectory
-    if (input.agent?.toLowerCase() === "sisyphus-junior") {
+    const agentName = input.agent?.toLowerCase()
+    if (agentName !== "argus" && agentName !== "momus") {
       task.gitBaseline = captureGitBaseline(parentDirectory)
     }
 
@@ -1024,7 +1025,7 @@ export class BackgroundManager {
       ? `\nDiff (task-scoped, unified=3):\n${changeSet.diff}\n`
       : "\nDiff: (none)\n"
 
-    return `Review the code changes from a completed background Sisyphus-Junior task.
+    return `Review the code changes from a completed background subagent task.
 
 Completed task: ${task.description}
 ${sessionLine}
@@ -1040,10 +1041,9 @@ Rules:
 
   private async maybeLaunchArgusAutoReview(task: BackgroundTask): Promise<void> {
     const agent = task.agent?.toLowerCase()
-    const parentAgent = task.parentAgent?.toLowerCase()
     if (task.status !== "completed") return
-    if (agent !== "sisyphus-junior") return
-    if (parentAgent !== "atlas") return
+    if (!agent) return
+    if (agent === "argus" || agent === "momus") return
     const changeSet = this.getTaskChangeSet(task)
     if (changeSet.isTrivial) {
       await this.notifyArgusSkip(task, changeSet)
